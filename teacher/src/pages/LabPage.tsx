@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Send, Bot, FlaskConical, CircleCheck as CheckCircle, ChevronRight, FileDown, Thermometer, Droplets, Eye, Lightbulb, Volume2, VolumeX, Calculator, NotebookPen, MessageCircle, Equal, X } from 'lucide-react';
+import { ArrowLeft, Send, Bot, FlaskConical, CheckCircle, ChevronRight, FileDown, Thermometer, Droplets, Eye, Lightbulb, Volume2, VolumeX, Calculator, NotebookPen, MessageCircle, Equal, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useVR } from '../context/VRContext';
 import { supabase, Experiment, ExperimentStep } from '../lib/supabase';
