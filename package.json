@@ -4,10 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "cd student && vite --host",
-    "build": "cd student && vite build",
-    "preview": "cd student && vite preview",
-    "typecheck": "cd student && tsc --noEmit -p tsconfig.app.json"
+    "dev": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
