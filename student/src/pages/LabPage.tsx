@@ -640,7 +640,7 @@ export default function LabPage() {
   const navigate = useNavigate();
   const { profile } = useAuth();
   const { voiceEnabled, setVoiceEnabled, speak, stopSpeaking, speaking } = useSpeech();
-  const { isVRMode, isStereoMode, isDeviceOrientation } = useVR();
+  const { isVRMode, isStereoMode, isDeviceOrientation, isPerfMode } = useVR();
 
   const [experiment, setExperiment] = useState<Experiment | null>(null);
   const [loading, setLoading] = useState(true);
@@ -885,6 +885,15 @@ export default function LabPage() {
               isVRMode={isVRMode}
               isStereoMode={isStereoMode}
               isDeviceOrientation={isDeviceOrientation}
+              isPerfMode={isPerfMode}
+              experimentStations={experiment ? [{
+                id: experiment.id,
+                title: experiment.title,
+                category: experiment.category,
+                difficulty: experiment.difficulty,
+                chemicals: experiment.chemicals,
+                equipment: experiment.equipment,
+              }] : []}
               onObjectClick={(name) => {
                 const msg: AiMessage = { role: 'ai', text: `You clicked on ${name}. This is a piece of lab equipment. Use it carefully according to the experiment procedure.`, type: 'info' };
                 setAiMessages(prev => [...prev, msg]);

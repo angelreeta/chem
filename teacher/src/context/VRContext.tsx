@@ -4,12 +4,14 @@ interface VRContextValue {
   isVRMode: boolean;
   isStereoMode: boolean;
   isDeviceOrientation: boolean;
+  isPerfMode: boolean;
   fullscreenEnabled: boolean;
   enterVRMode: () => void;
   exitVRMode: () => void;
   toggleVRMode: () => void;
   toggleStereoMode: () => void;
   toggleDeviceOrientation: () => void;
+  togglePerfMode: () => void;
   requestFullscreen: () => void;
   exitFullscreen: () => void;
 }
@@ -20,6 +22,7 @@ export function VRProvider({ children }: { children: ReactNode }) {
   const [isVRMode, setIsVRMode] = useState(false);
   const [isStereoMode, setIsStereoMode] = useState(false);
   const [isDeviceOrientation, setIsDeviceOrientation] = useState(false);
+  const [isPerfMode, setIsPerfMode] = useState(false);
   const [fullscreenEnabled, setFullscreenEnabled] = useState(false);
 
   const requestFullscreen = useCallback(() => {
@@ -86,6 +89,10 @@ export function VRProvider({ children }: { children: ReactNode }) {
     setIsStereoMode(prev => !prev);
   }, []);
 
+  const togglePerfMode = useCallback(() => {
+    setIsPerfMode(prev => !prev);
+  }, []);
+
   const toggleDeviceOrientation = useCallback(() => {
     if (!isDeviceOrientation) {
       if (typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
@@ -137,12 +144,14 @@ export function VRProvider({ children }: { children: ReactNode }) {
       isVRMode,
       isStereoMode,
       isDeviceOrientation,
+      isPerfMode,
       fullscreenEnabled,
       enterVRMode,
       exitVRMode,
       toggleVRMode,
       toggleStereoMode,
       toggleDeviceOrientation,
+      togglePerfMode,
       requestFullscreen,
       exitFullscreen,
     }}>
