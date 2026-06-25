@@ -1,13 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import {
-  ArrowLeft, Send, Bot, FlaskConical, CheckCircle,
-  ChevronRight, FileDown, Thermometer, Droplets, Eye, Lightbulb,
-  Volume2, VolumeX, Calculator, NotebookPen, MessageCircle, Equal
-} from 'lucide-react';
+import { ArrowLeft, Send, Bot, FlaskConical, CircleCheck as CheckCircle, ChevronRight, FileDown, Thermometer, Droplets, Eye, Lightbulb, Volume2, VolumeX, Calculator, NotebookPen, MessageCircle, Equal } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useVR } from '../context/VRContext';
 import { supabase, Experiment, ExperimentStep } from '../lib/supabase';
 import ThreeLabCanvas from '../components/ThreeLabCanvas';
+import VRModeToggle from '../components/VRModeToggle';
 
 type RightTab = 'tutor' | 'calc' | 'notes';
 
@@ -642,6 +640,7 @@ export default function LabPage() {
   const navigate = useNavigate();
   const { profile } = useAuth();
   const { voiceEnabled, setVoiceEnabled, speak, stopSpeaking, speaking } = useSpeech();
+  const { isVRMode, isStereoMode, isDeviceOrientation } = useVR();
 
   const [experiment, setExperiment] = useState<Experiment | null>(null);
   const [loading, setLoading] = useState(true);
@@ -842,6 +841,9 @@ export default function LabPage() {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {/* VR Mode Toggle */}
+          <VRModeToggle />
+
           {/* Voice toggle */}
           <button
             onClick={() => { setVoiceEnabled(!voiceEnabled); if (voiceEnabled) stopSpeaking(); }}
@@ -880,6 +882,13 @@ export default function LabPage() {
               reactionColor={reactionState.color}
               hasGas={reactionState.gasProduced}
               hasPrecipitate={reactionState.hasPrecipitate}
+              isVRMode={isVRMode}
+              isStereoMode={isStereoMode}
+              isDeviceOrientation={isDeviceOrientation}
+              onObjectClick={(name) => {
+                const msg: AiMessage = { role: 'ai', text: `You clicked on ${name}. This is a piece of lab equipment. Use it carefully according to the experiment procedure.`, type: 'info' };
+                setAiMessages(prev => [...prev, msg]);
+              }}
             />
 
             {/* Reaction readouts */}

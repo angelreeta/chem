@@ -1,10 +1,14 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 
 interface Props {
   reactionColor: string;
   hasGas: boolean;
   hasPrecipitate: boolean;
+  isVRMode?: boolean;
+  isStereoMode?: boolean;
+  isDeviceOrientation?: boolean;
+  onObjectClick?: (objectName: string) => void;
 }
 
 function hexToRGB(hex: string): { r: number; g: number; b: number } {
@@ -14,8 +18,17 @@ function hexToRGB(hex: string): { r: number; g: number; b: number } {
     : { r: 0.9, g: 0.95, b: 1 };
 }
 
-export default function ThreeLabCanvas({ reactionColor, hasGas, hasPrecipitate }: Props) {
+export default function ThreeLabCanvas({
+  reactionColor,
+  hasGas,
+  hasPrecipitate,
+  isVRMode = false,
+  isStereoMode = false,
+  isDeviceOrientation = false,
+  onObjectClick,
+}: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
+  const [selectedObject, setSelectedObject] = useState<string | null>(null);
   const sceneRef = useRef<{
     renderer: THREE.WebGLRenderer;
     scene: THREE.Scene;
@@ -28,6 +41,9 @@ export default function ThreeLabCanvas({ reactionColor, hasGas, hasPrecipitate }
     testTubes: THREE.Group[];
     beaker: THREE.Mesh;
     time: number;
+    labRoom?: THREE.Group;
+    vrSession?: XRSession | null;
+    deviceOrientation?: { alpha: number; beta: number; gamma: number };
   } | null>(null);
 
   useEffect(() => {
@@ -39,74 +55,204 @@ export default function ThreeLabCanvas({ reactionColor, hasGas, hasPrecipitate }
     // Scene
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0a0f1e);
-    scene.fog = new THREE.FogExp2(0x0a0f1e, 0.05);
 
-    // Camera
-    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
-    camera.position.set(0, 2.5, 7);
-    camera.lookAt(0, 0.5, 0);
+    // Camera - adjusted for VR mode (different FOV)
+    const camera = new THREE.PerspectiveCamera(
+      isVRMode ? 75 : 45,
+      width / height,
+      0.1,
+      isVRMode ? 1000 : 100
+    );
 
-    // Renderer
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    if (isVRMode) {
+      camera.position.set(0, 1.6, 0);
+      camera.lookAt(0, 1.6, -1);
+    } else {
+      camera.position.set(0, 2.5, 7);
+      camera.lookAt(0, 0.5, 0);
+    }
+
+    // Renderer with VR support
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: true,
+      xrCompatible: true
+    });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
     mountRef.current.appendChild(renderer.domElement);
 
-    // Lights
-    const ambient = new THREE.AmbientLight(0x1a2a4a, 0.8);
+    // Lights - enhanced for VR
+    const ambient = new THREE.AmbientLight(0x1a2a4a, isVRMode ? 1.2 : 0.8);
     scene.add(ambient);
 
-    const pointLight = new THREE.PointLight(0x00e5ff, 1.5, 20);
+    const pointLight = new THREE.PointLight(0x00e5ff, isVRMode ? 2 : 1.5, 20);
     pointLight.position.set(-2, 4, 2);
     pointLight.castShadow = true;
     scene.add(pointLight);
 
-    const rimLight = new THREE.PointLight(0x4488ff, 0.8, 15);
+    const rimLight = new THREE.PointLight(0x4488ff, isVRMode ? 1.2 : 0.8, 15);
     rimLight.position.set(3, 3, -2);
     scene.add(rimLight);
 
-    const labLight = new THREE.DirectionalLight(0xffffff, 0.4);
+    const labLight = new THREE.DirectionalLight(0xffffff, isVRMode ? 0.6 : 0.4);
     labLight.position.set(0, 8, 4);
     scene.add(labLight);
 
-    // Lab bench/table
-    const benchGeo = new THREE.BoxGeometry(10, 0.15, 3.5);
-    const benchMat = new THREE.MeshStandardMaterial({ color: 0x1a2535, roughness: 0.8, metalness: 0.1 });
-    const bench = new THREE.Mesh(benchGeo, benchMat);
-    bench.position.y = -0.5;
-    bench.receiveShadow = true;
-    scene.add(bench);
+    // ─── VR 360 Environment ────────────────────────────────────────────────
+    if (isVRMode) {
+      // Create full lab room
+      const labRoom = new THREE.Group();
+      scene.add(labRoom);
 
-    // Bench legs
-    [[-4.5, -1.5, -1.5], [4.5, -1.5, -1.5], [-4.5, -1.5, 1.5], [4.5, -1.5, 1.5]].forEach(([x, y, z]) => {
-      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2, 0.1), new THREE.MeshStandardMaterial({ color: 0x111827, metalness: 0.6 }));
-      leg.position.set(x, y, z);
-      scene.add(leg);
-    });
+      // Floor - tiled pattern
+      const floorGeo = new THREE.PlaneGeometry(20, 20);
+      const floorMat = new THREE.MeshStandardMaterial({
+        color: 0x1a2535,
+        roughness: 0.8,
+        metalness: 0.2
+      });
+      const floor = new THREE.Mesh(floorGeo, floorMat);
+      floor.rotation.x = -Math.PI / 2;
+      floor.receiveShadow = true;
+      labRoom.add(floor);
 
-    // Grid lines on bench
-    const grid = new THREE.GridHelper(10, 20, 0x1e3a5f, 0x0d1f35);
-    grid.position.y = -0.42;
-    grid.position.z = -0.25;
-    scene.add(grid);
+      // Ceiling
+      const ceilingGeo = new THREE.PlaneGeometry(20, 20);
+      const ceilingMat = new THREE.MeshStandardMaterial({ color: 0x0a101a, side: THREE.DoubleSide });
+      const ceiling = new THREE.Mesh(ceilingGeo, ceilingMat);
+      ceiling.rotation.x = Math.PI / 2;
+      ceiling.position.y = 5;
+      labRoom.add(ceiling);
 
-    // --- Main Erlenmeyer Flask ---
-    const flaskGroup = new THREE.Group();
-    scene.add(flaskGroup);
-    flaskGroup.position.set(-0.5, -0.42, 0);
+      // Walls
+      const wallMat = new THREE.MeshStandardMaterial({ color: 0x1e2a3a, side: THREE.DoubleSide });
+      const wallGeo = new THREE.PlaneGeometry(20, 5);
 
-    // Flask body (cone-like)
-    const flaskBodyGeo = new THREE.CylinderGeometry(0.6, 0.65, 1.0, 32, 1, true);
+      const backWall = new THREE.Mesh(wallGeo, wallMat);
+      backWall.position.set(0, 2.5, -10);
+      labRoom.add(backWall);
+
+      const frontWall = new THREE.Mesh(wallGeo, wallMat);
+      frontWall.position.set(0, 2.5, 10);
+      frontWall.rotation.y = Math.PI;
+      labRoom.add(frontWall);
+
+      const leftWall = new THREE.Mesh(wallGeo, wallMat);
+      leftWall.position.set(-10, 2.5, 0);
+      leftWall.rotation.y = Math.PI / 2;
+      labRoom.add(leftWall);
+
+      const rightWall = new THREE.Mesh(wallGeo, wallMat);
+      rightWall.position.set(10, 2.5, 0);
+      rightWall.rotation.y = -Math.PI / 2;
+      labRoom.add(rightWall);
+
+      // Additional lab benches in VR
+      const benchPositions = [
+        { x: 0, z: -3 },
+        { x: -5, z: -3 },
+        { x: 5, z: -3 },
+        { x: -5, z: 3 },
+        { x: 5, z: 3 },
+      ];
+
+      benchPositions.forEach((pos, i) => {
+        const benchGroup = new THREE.Group();
+        benchGroup.position.set(pos.x, 0, pos.z);
+
+        const benchGeo = new THREE.BoxGeometry(3, 0.15, 1.5);
+        const benchMat = new THREE.MeshStandardMaterial({ color: 0x1a2535, roughness: 0.8 });
+        const bench = new THREE.Mesh(benchGeo, benchMat);
+        bench.position.y = 0.9;
+        bench.receiveShadow = true;
+        benchGroup.add(bench);
+
+        // Bench legs
+        [[-1.3, 0], [1.3, 0], [-1.3, -0.6], [1.3, -0.6]].forEach(([lx, lz]) => {
+          const leg = new THREE.Mesh(
+            new THREE.BoxGeometry(0.08, 0.9, 0.08),
+            new THREE.MeshStandardMaterial({ color: 0x111827, metalness: 0.6 })
+          );
+          leg.position.set(lx, 0.45, lz);
+          benchGroup.add(leg);
+        });
+
+        labRoom.add(benchGroup);
+      });
+
+      // Safety shower and eyewash station
+      const showerGroup = new THREE.Group();
+      showerGroup.position.set(-8, 0, -5);
+      const showerPole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.05, 0.05, 2.5, 8),
+        new THREE.MeshStandardMaterial({ color: 0xff6600 })
+      );
+      showerPole.position.y = 3.75;
+      showerGroup.add(showerPole);
+      labRoom.add(showerGroup);
+
+      // Fire extinguisher
+      const extinguisherGroup = new THREE.Group();
+      extinguisherGroup.position.set(8, 0, -5);
+      const extinguisher = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.1, 0.12, 0.5, 16),
+        new THREE.MeshStandardMaterial({ color: 0xff0000 })
+      );
+      extinguisher.position.y = 1.2;
+      extinguisherGroup.add(extinguisher);
+      labRoom.add(extinguisherGroup);
+
+      // Add fog for depth in VR
+      scene.fog = new THREE.FogExp2(0x0a0f1e, 0.03);
+      scene.background = new THREE.Color(0x0a0f1e);
+    } else {
+      // Normal mode - just the workbench
+      scene.fog = new THREE.FogExp2(0x0a0f1e, 0.05);
+
+      const benchGeo = new THREE.BoxGeometry(10, 0.15, 3.5);
+      const benchMat = new THREE.MeshStandardMaterial({ color: 0x1a2535, roughness: 0.8, metalness: 0.1 });
+      const bench = new THREE.Mesh(benchGeo, benchMat);
+      bench.position.y = -0.5;
+      bench.receiveShadow = true;
+      scene.add(bench);
+
+      // Bench legs
+      [[-4.5, -1.5, -1.5], [4.5, -1.5, -1.5], [-4.5, -1.5, 1.5], [4.5, -1.5, 1.5]].forEach(([x, y, z]) => {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2, 0.1), new THREE.MeshStandardMaterial({ color: 0x111827, metalness: 0.6 }));
+        leg.position.set(x, y, z);
+        scene.add(leg);
+      });
+
+      // Grid lines on bench
+      const grid = new THREE.GridHelper(10, 20, 0x1e3a5f, 0x0d1f35);
+      grid.position.y = -0.42;
+      grid.position.z = -0.25;
+      scene.add(grid);
+    }
+
+    // ─── Interactive Lab Equipment ─────────────────────────────────────────
+    const interactiveObjects: THREE.Mesh[] = [];
     const glassMat = new THREE.MeshPhysicalMaterial({
       color: 0xd0e8ff, transparent: true, opacity: 0.25,
       roughness: 0.05, metalness: 0, transmission: 0.95,
       thickness: 0.5, envMapIntensity: 1,
     });
+
+    // Main Erlenmeyer Flask
+    const flaskGroup = new THREE.Group();
+    scene.add(flaskGroup);
+    flaskGroup.position.set(isVRMode ? 0 : -0.5, isVRMode ? 0.9 : -0.42, isVRMode ? -3 : 0);
+
+    const flaskBodyGeo = new THREE.CylinderGeometry(0.6, 0.65, 1.0, 32, 1, true);
     const flaskBody = new THREE.Mesh(flaskBodyGeo, glassMat);
     flaskBody.position.y = 0.5;
+    flaskBody.userData = { name: 'Erlenmeyer Flask', interactive: true };
     flaskGroup.add(flaskBody);
+    interactiveObjects.push(flaskBody);
 
     // Flask neck
     const flaskNeck = new THREE.Mesh(
@@ -125,10 +271,7 @@ export default function ThreeLabCanvas({ reactionColor, hasGas, hasPrecipitate }
     flaskGroup.add(flaskRim);
 
     // Flask bottom disk
-    const flaskBottom = new THREE.Mesh(
-      new THREE.CircleGeometry(0.65, 32),
-      glassMat
-    );
+    const flaskBottom = new THREE.Mesh(new THREE.CircleGeometry(0.65, 32), glassMat);
     flaskBottom.rotation.x = -Math.PI / 2;
     flaskGroup.add(flaskBottom);
 
@@ -145,9 +288,9 @@ export default function ThreeLabCanvas({ reactionColor, hasGas, hasPrecipitate }
     liquid.position.y = 0.25;
     flaskGroup.add(liquid);
 
-    // --- Burette ---
+    // ─── Burette ─────────────────────────────────────────────────────────────
     const buretteGroup = new THREE.Group();
-    buretteGroup.position.set(1.5, -0.42, 0);
+    buretteGroup.position.set(isVRMode ? 1.5 : 1.5, isVRMode ? 0.9 : -0.42, isVRMode ? -3 : 0);
     scene.add(buretteGroup);
 
     const buretteTube = new THREE.Mesh(
@@ -155,7 +298,9 @@ export default function ThreeLabCanvas({ reactionColor, hasGas, hasPrecipitate }
       new THREE.MeshPhysicalMaterial({ color: 0xd0e8ff, transparent: true, opacity: 0.3, roughness: 0.05 })
     );
     buretteTube.position.y = 1.25;
+    buretteTube.userData = { name: 'Burette', interactive: true };
     buretteGroup.add(buretteTube);
+    interactiveObjects.push(buretteTube);
 
     // Burette liquid
     const buretteLiquid = new THREE.Mesh(
@@ -180,7 +325,6 @@ export default function ThreeLabCanvas({ reactionColor, hasGas, hasPrecipitate }
     clamp.position.set(-0.15, 1.6, 0);
     buretteGroup.add(clamp);
 
-    // Base plate
     const base = new THREE.Mesh(
       new THREE.BoxGeometry(0.8, 0.05, 0.6),
       new THREE.MeshStandardMaterial({ color: 0x1a2535, metalness: 0.4 })
@@ -188,9 +332,9 @@ export default function ThreeLabCanvas({ reactionColor, hasGas, hasPrecipitate }
     base.position.y = -0.02;
     buretteGroup.add(base);
 
-    // --- Test tubes rack ---
+    // ─── Test tubes rack ─────────────────────────────────────────────────────
     const testTubesGroup = new THREE.Group();
-    testTubesGroup.position.set(-2.2, -0.42, 0);
+    testTubesGroup.position.set(isVRMode ? -2.5 : -2.2, isVRMode ? 0.9 : -0.42, isVRMode ? -3 : 0);
     scene.add(testTubesGroup);
 
     const tubeColors = [0xff6b6b, 0xffd700, 0x88ccff, 0x88ff88];
@@ -200,7 +344,9 @@ export default function ThreeLabCanvas({ reactionColor, hasGas, hasPrecipitate }
         new THREE.MeshPhysicalMaterial({ color: 0xd0e8ff, transparent: true, opacity: 0.3 })
       );
       tube.position.set(i * 0.22 - 0.33, 0.55, 0);
+      tube.userData = { name: `Test Tube ${i + 1}`, interactive: true };
       testTubesGroup.add(tube);
+      interactiveObjects.push(tube);
 
       const tubeLiquid = new THREE.Mesh(
         new THREE.CylinderGeometry(0.05, 0.05, 0.2 + i * 0.05, 12),
@@ -218,9 +364,9 @@ export default function ThreeLabCanvas({ reactionColor, hasGas, hasPrecipitate }
     rack.position.set(0, 0.02, 0);
     testTubesGroup.add(rack);
 
-    // --- Beaker with stirrer ---
+    // ─── Beaker with stirrer ─────────────────────────────────────────────────
     const beakerGroup = new THREE.Group();
-    beakerGroup.position.set(2.5, -0.42, 0);
+    beakerGroup.position.set(isVRMode ? 2.5 : 2.5, isVRMode ? 0.9 : -0.42, isVRMode ? -3 : 0);
     scene.add(beakerGroup);
 
     const beaker = new THREE.Mesh(
@@ -228,12 +374,11 @@ export default function ThreeLabCanvas({ reactionColor, hasGas, hasPrecipitate }
       new THREE.MeshPhysicalMaterial({ color: 0xd0e8ff, transparent: true, opacity: 0.25, roughness: 0.05 })
     );
     beaker.position.y = 0.4;
+    beaker.userData = { name: 'Beaker', interactive: true };
     beakerGroup.add(beaker);
+    interactiveObjects.push(beaker);
 
-    const beakerBottom = new THREE.Mesh(
-      new THREE.CircleGeometry(0.35, 24),
-      glassMat
-    );
+    const beakerBottom = new THREE.Mesh(new THREE.CircleGeometry(0.35, 24), glassMat);
     beakerBottom.rotation.x = -Math.PI / 2;
     beakerGroup.add(beakerBottom);
 
@@ -253,17 +398,18 @@ export default function ThreeLabCanvas({ reactionColor, hasGas, hasPrecipitate }
     stirrer.rotation.z = 0.3;
     beakerGroup.add(stirrer);
 
-    // Gas particle system
+    // ─── Particle Systems ────────────────────────────────────────────────────
     const particles: THREE.Points[] = [];
 
     function createGasParticles() {
       const geo = new THREE.BufferGeometry();
-      const count = 80;
+      const count = isVRMode ? 150 : 80;
       const pos = new Float32Array(count * 3);
+      const basePos = isVRMode ? -3 : 0;
       for (let i = 0; i < count; i++) {
-        pos[i * 3] = (Math.random() - 0.5) * 0.8 - 0.5;
+        pos[i * 3] = (Math.random() - 0.5) * 0.8 + (isVRMode ? 0 : -0.5);
         pos[i * 3 + 1] = Math.random() * 1.5 + 1.5;
-        pos[i * 3 + 2] = (Math.random() - 0.5) * 0.8;
+        pos[i * 3 + 2] = (Math.random() - 0.5) * 0.8 + basePos;
       }
       geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
       const mat = new THREE.PointsMaterial({ color: 0xaaffff, size: 0.04, transparent: true, opacity: 0.7 });
@@ -272,17 +418,17 @@ export default function ThreeLabCanvas({ reactionColor, hasGas, hasPrecipitate }
       particles.push(points);
     }
 
-    // Precipitate particles
     function createPrecipitate() {
       const geo = new THREE.BufferGeometry();
-      const count = 120;
+      const count = isVRMode ? 200 : 120;
       const pos = new Float32Array(count * 3);
+      const basePos = isVRMode ? -3 : 0;
       for (let i = 0; i < count; i++) {
         const r2 = Math.random() * 0.55;
         const a = Math.random() * Math.PI * 2;
-        pos[i * 3] = Math.cos(a) * r2 - 0.5;
-        pos[i * 3 + 1] = Math.random() * 0.4 - 0.4;
-        pos[i * 3 + 2] = Math.sin(a) * r2;
+        pos[i * 3] = Math.cos(a) * r2 + (isVRMode ? 0 : -0.5);
+        pos[i * 3 + 1] = Math.random() * 0.4 + (isVRMode ? 0.9 : -0.4);
+        pos[i * 3 + 2] = Math.sin(a) * r2 + basePos;
       }
       geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
       const mat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.02, transparent: true, opacity: 0.8 });
@@ -291,14 +437,73 @@ export default function ThreeLabCanvas({ reactionColor, hasGas, hasPrecipitate }
       particles.push(points);
     }
 
-    let time = 0;
+    // Click handler for interactive objects
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
 
+    function handleClick(event: MouseEvent | TouchEvent) {
+      if (!mountRef.current || !isVRMode) return;
+
+      const rect = mountRef.current.getBoundingClientRect();
+      const clientX = 'touches' in event ? event.touches[0].clientX : event.clientX;
+      const clientY = 'touches' in event ? event.touches[0].clientY : event.clientY;
+
+      mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObjects(interactiveObjects);
+
+      if (intersects.length > 0) {
+        const obj = intersects[0].object;
+        const name = obj.userData?.name;
+        if (name) {
+          setSelectedObject(name);
+          onObjectClick?.(name);
+          setTimeout(() => setSelectedObject(null), 2000);
+        }
+      }
+    }
+
+    if (isVRMode) {
+      mountRef.current.addEventListener('click', handleClick);
+      mountRef.current.addEventListener('touchend', handleClick);
+    }
+
+    let time = 0;
+    let deviceOrientationData = { alpha: 0, beta: 0, gamma: 0 };
+
+    // Device orientation handler for mobile VR
+    const handleDeviceOrientation = (e: DeviceOrientationEvent) => {
+      if (!isDeviceOrientation || !isVRMode) return;
+      deviceOrientationData = {
+        alpha: e.alpha || 0,
+        beta: e.beta || 0,
+        gamma: e.gamma || 0,
+      };
+    };
+
+    if (isDeviceOrientation) {
+      window.addEventListener('deviceorientation', handleDeviceOrientation);
+    }
+
+    // Animation loop
     function animate() {
       time += 0.016;
 
-      // Gentle camera sway
-      camera.position.x = Math.sin(time * 0.1) * 0.3;
-      camera.lookAt(0, 0.5, 0);
+      // VR mode - device orientation controls camera
+      if (isVRMode && isDeviceOrientation) {
+        // Convert device orientation to camera rotation
+        const alpha = THREE.MathUtils.degToRad(deviceOrientationData.alpha);
+        const beta = THREE.MathUtils.degToRad(deviceOrientationData.beta);
+        const gamma = THREE.MathUtils.degToRad(deviceOrientationData.gamma);
+
+        camera.rotation.set(beta, alpha, -gamma, 'YXZ');
+      } else {
+        // Normal mode - gentle camera sway
+        camera.position.x = Math.sin(time * 0.1) * 0.3;
+        if (!isVRMode) camera.lookAt(0, 0.5, 0);
+      }
 
       // Liquid gentle wave
       if (liquid) {
@@ -316,12 +521,12 @@ export default function ThreeLabCanvas({ reactionColor, hasGas, hasPrecipitate }
         (pts.material as THREE.PointsMaterial).opacity = 0.4 + Math.sin(time * 2) * 0.3;
       });
 
-      // Burette drip indicator (subtle flash)
+      // Burette drip indicator
       const buretteMat = buretteLiquid.material as THREE.MeshStandardMaterial;
       buretteMat.emissiveIntensity = 0.05 + Math.sin(time * 3) * 0.05;
 
       // Point light subtle pulse
-      pointLight.intensity = 1.3 + Math.sin(time * 0.7) * 0.2;
+      pointLight.intensity = (isVRMode ? 2 : 1.5) + Math.sin(time * 0.7) * 0.2;
 
       renderer.render(scene, camera);
       sceneRef.current!.frameId = requestAnimationFrame(animate);
@@ -340,6 +545,7 @@ export default function ThreeLabCanvas({ reactionColor, hasGas, hasPrecipitate }
       testTubes: [testTubesGroup],
       beaker: beaker,
       time,
+      deviceOrientation: deviceOrientationData,
     };
 
     // Resize handler
@@ -353,8 +559,14 @@ export default function ThreeLabCanvas({ reactionColor, hasGas, hasPrecipitate }
     };
     window.addEventListener('resize', handleResize);
 
+    // Cleanup
     return () => {
       window.removeEventListener('resize', handleResize);
+      window.removeEventListener('deviceorientation', handleDeviceOrientation);
+      if (mountRef.current) {
+        mountRef.current.removeEventListener('click', handleClick);
+        mountRef.current.removeEventListener('touchend', handleClick);
+      }
       if (sceneRef.current) {
         cancelAnimationFrame(sceneRef.current.frameId);
       }
@@ -363,7 +575,7 @@ export default function ThreeLabCanvas({ reactionColor, hasGas, hasPrecipitate }
       }
       renderer.dispose();
     };
-  }, []);
+  }, [isVRMode, isDeviceOrientation]);
 
   // Update liquid color reactively
   useEffect(() => {
@@ -375,13 +587,44 @@ export default function ThreeLabCanvas({ reactionColor, hasGas, hasPrecipitate }
     mat.needsUpdate = true;
   }, [reactionColor]);
 
+  // Stereo mode - render with split-screen effect
+  const stereoStyle = isStereoMode ? {
+    transform: 'scaleX(0.5)',
+    transformOrigin: 'left center',
+  } : {};
+
   return (
-    <div ref={mountRef} className="w-full h-full relative">
-      {/* HUD overlay */}
-      <div className="absolute bottom-3 right-3 glass rounded-lg px-3 py-2 text-xs text-slate-400 flex items-center gap-2">
-        <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-        3D Lab Simulation — Interactive
-      </div>
+    <div ref={mountRef} className={`w-full h-full relative ${isStereoMode ? 'stereo-mode' : ''}`} style={stereoStyle}>
+      {/* VR Mode HUD */}
+      {isVRMode && (
+        <div className="absolute inset-0 pointer-events-none">
+          {/* Crosshair for VR aiming */}
+          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
+            <div className="w-6 h-6 border-2 border-cyan-400/50 rounded-full" />
+            <div className="absolute top-1/2 left-1/2 w-1 h-1 bg-cyan-400 rounded-full transform -translate-x-1/2 -translate-y-1/2" />
+          </div>
+
+          {/* Selected object label */}
+          {selectedObject && (
+            <div className="absolute bottom-20 left-1/2 transform -translate-x-1/2 bg-cyan-500/20 backdrop-blur-sm border border-cyan-500/40 rounded-lg px-4 py-2">
+              <p className="text-cyan-300 text-sm font-medium">{selectedObject}</p>
+            </div>
+          )}
+
+          {/* VR Instructions */}
+          <div className="absolute top-4 left-1/2 transform -translate-x-1/2 text-center">
+            <p className="text-slate-400 text-xs">Move device to look around · Tap to interact</p>
+          </div>
+        </div>
+      )}
+
+      {/* Normal mode HUD */}
+      {!isVRMode && (
+        <div className="absolute bottom-3 right-3 glass rounded-lg px-3 py-2 text-xs text-slate-400 flex items-center gap-2">
+          <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+          3D Lab Simulation — Interactive
+        </div>
+      )}
     </div>
   );
 }

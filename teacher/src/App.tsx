@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { VRProvider } from './context/VRContext';
 import AuthPage from './pages/AuthPage';
 import StudentDashboard from './pages/StudentDashboard';
 import AdminDashboard from './pages/AdminDashboard';
@@ -70,7 +71,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <AppRoutes />
+        <VRProvider>
+          <AppRoutes />
+        </VRProvider>
       </AuthProvider>
     </BrowserRouter>
   );
