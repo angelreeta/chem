@@ -655,7 +655,7 @@ export default function LabPage() {
   const [hintsUsed, setHintsUsed] = useState(0);
   const [startTime] = useState(Date.now());
   const [reactionState, setReactionState] = useState<ReactionState>({ color: '#e8f4f8', temperature: 22, hasPrecipitate: false, gasProduced: false, colorName: 'Clear' });
-  const [activeTab, setActiveTab] = useState<RightTab>('tutor');
+  const [activeTab, setActiveTab] = useState<RightTab | null>(null);
   const [exporting, setExporting] = useState(false);
   const [calcLog, setCalcLog] = useState<CalcEntry[]>([]);
   const aiEndRef = useRef<HTMLDivElement>(null);
@@ -819,17 +819,22 @@ export default function LabPage() {
 
   const steps = experiment.steps as ExperimentStep[];
   const currentStepData = steps[currentStep];
+  const drawerOpen = activeTab !== null;
 
-  const TABS: { id: RightTab; label: string; icon: React.ElementType }[] = [
-    { id: 'tutor', label: 'AI Tutor', icon: MessageCircle },
-    { id: 'calc', label: 'Calculations', icon: Calculator },
-    { id: 'notes', label: 'Notes', icon: NotebookPen },
+  function toggleTab(tab: RightTab) {
+    setActiveTab(prev => prev === tab ? null : tab);
+  }
+
+  const BOTTOM_TABS: { id: RightTab; label: string; icon: React.ElementType; color: string }[] = [
+    { id: 'tutor', label: 'AI Tutor', icon: Bot, color: 'text-cyan-400' },
+    { id: 'calc', label: 'Calculator', icon: Calculator, color: 'text-violet-400' },
+    { id: 'notes', label: 'Notes', icon: NotebookPen, color: 'text-amber-400' },
   ];
 
   return (
-    <div className="flex flex-col w-full h-full bg-gray-950 overflow-hidden">
-      {/* Header */}
-      <header className="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/80 backdrop-blur-sm shrink-0 gap-3">
+    <div className="flex flex-col w-full h-full bg-gray-950 overflow-hidden relative">
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      <header className="flex items-center justify-between px-4 py-2.5 border-b border-slate-800 bg-slate-900/90 backdrop-blur-sm shrink-0 gap-3 z-10">
         <div className="flex items-center gap-3 min-w-0">
           <button onClick={handleLeave} className="p-1.5 rounded-lg text-slate-500 hover:text-slate-200 hover:bg-slate-800 transition-colors shrink-0">
             <ArrowLeft className="w-4 h-4" />
@@ -841,25 +846,19 @@ export default function LabPage() {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {/* VR Mode Toggle */}
           <VRModeToggle />
-
-          {/* Voice toggle */}
           <button
             onClick={() => { setVoiceEnabled(!voiceEnabled); if (voiceEnabled) stopSpeaking(); }}
-            title={voiceEnabled ? 'Voice On (click to mute)' : 'Voice Off (click to enable)'}
             className={`p-1.5 rounded-lg transition-colors ${voiceEnabled ? 'text-cyan-400 bg-cyan-500/10 hover:bg-cyan-500/20' : 'text-slate-600 hover:text-slate-400 hover:bg-slate-800'}`}
           >
             {voiceEnabled ? <Volume2 className={`w-4 h-4 ${speaking ? 'animate-pulse' : ''}`} /> : <VolumeX className="w-4 h-4" />}
           </button>
-
-          <div className="hidden sm:flex items-center gap-2">
-            <div className="w-24 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-              <div className="h-full bg-cyan-500 rounded-full transition-all" style={{ width: `${((currentStep + (completed ? 1 : 0)) / steps.length) * 100}%` }} />
+          <div className="flex items-center gap-2">
+            <div className="w-20 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+              <div className="h-full bg-cyan-500 rounded-full transition-all duration-500" style={{ width: `${((currentStep + (completed ? 1 : 0)) / steps.length) * 100}%` }} />
             </div>
-            <span className="text-slate-400 text-xs">{completed ? steps.length : currentStep}/{steps.length}</span>
+            <span className="text-slate-400 text-xs tabular-nums">{completed ? steps.length : currentStep}/{steps.length}</span>
           </div>
-
           {completed && (
             <button
               onClick={handleExportPDF}
@@ -867,287 +866,330 @@ export default function LabPage() {
               className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-500/20 hover:bg-cyan-500 text-cyan-400 hover:text-gray-900 border border-cyan-500/40 hover:border-cyan-500 rounded-lg text-xs font-medium transition-all disabled:opacity-50"
             >
               <FileDown className="w-3.5 h-3.5" />
-              {exporting ? 'Opening...' : 'Export PDF'}
+              {exporting ? 'Opening...' : 'PDF'}
             </button>
           )}
         </div>
       </header>
 
-      {/* Main */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* 3D Canvas area */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="flex-1 relative">
-            <ThreeLabCanvas
-              reactionColor={reactionState.color}
-              hasGas={reactionState.gasProduced}
-              hasPrecipitate={reactionState.hasPrecipitate}
-              isVRMode={isVRMode}
-              isStereoMode={isStereoMode}
-              isDeviceOrientation={isDeviceOrientation}
-              isPerfMode={isPerfMode}
-              experimentStations={experiment ? [{
-                id: experiment.id,
-                title: experiment.title,
-                category: experiment.category,
-                difficulty: experiment.difficulty,
-                chemicals: experiment.chemicals,
-                equipment: experiment.equipment,
-              }] : []}
-              onObjectClick={(name) => {
-                const msg: AiMessage = { role: 'ai', text: `You clicked on ${name}. This is a piece of lab equipment. Use it carefully according to the experiment procedure.`, type: 'info' };
-                setAiMessages(prev => [...prev, msg]);
-              }}
-            />
+      {/* ── Full-screen 3D Canvas ─────────────────────────────────────────── */}
+      <div className="flex-1 relative overflow-hidden">
+        <ThreeLabCanvas
+          reactionColor={reactionState.color}
+          hasGas={reactionState.gasProduced}
+          hasPrecipitate={reactionState.hasPrecipitate}
+          isVRMode={isVRMode}
+          isStereoMode={isStereoMode}
+          isDeviceOrientation={isDeviceOrientation}
+          isPerfMode={isPerfMode}
+          experimentStations={[{
+            id: experiment.id,
+            title: experiment.title,
+            category: experiment.category,
+            difficulty: experiment.difficulty,
+            chemicals: experiment.chemicals,
+            equipment: experiment.equipment,
+          }]}
+          onObjectClick={(name) => {
+            const msg: AiMessage = { role: 'ai', text: `You clicked on ${name}. This is a piece of lab equipment. Use it carefully according to the experiment procedure.`, type: 'info' };
+            setAiMessages(prev => [...prev, msg]);
+            setActiveTab('tutor');
+          }}
+        />
 
-            {/* Reaction readouts */}
-            <div className="absolute top-3 left-3 flex flex-col gap-2">
-              <div className="glass rounded-lg px-3 py-2 flex items-center gap-2">
-                <Thermometer className="w-3.5 h-3.5 text-red-400" />
-                <span className="text-white text-xs font-medium">{reactionState.temperature.toFixed(1)}°C</span>
-              </div>
-              <div className="glass rounded-lg px-3 py-2 flex items-center gap-2">
-                <Droplets className="w-3.5 h-3.5 text-blue-400" />
-                <span className="text-white text-xs font-medium">{reactionState.colorName}</span>
-              </div>
-              {reactionState.gasProduced && (
-                <div className="glass rounded-lg px-3 py-2 flex items-center gap-2 animate-pulse-glow">
-                  <Eye className="w-3.5 h-3.5 text-yellow-400" />
-                  <span className="text-yellow-400 text-xs font-medium">Gas detected!</span>
+        {/* Reaction readouts — top left */}
+        <div className="absolute top-3 left-3 flex flex-col gap-1.5 z-10">
+          <div className="glass rounded-lg px-3 py-1.5 flex items-center gap-2">
+            <Thermometer className="w-3.5 h-3.5 text-red-400" />
+            <span className="text-white text-xs font-medium">{reactionState.temperature.toFixed(1)}°C</span>
+          </div>
+          <div className="glass rounded-lg px-3 py-1.5 flex items-center gap-2">
+            <Droplets className="w-3.5 h-3.5 text-blue-400" />
+            <span className="text-white text-xs font-medium">{reactionState.colorName}</span>
+          </div>
+          {reactionState.gasProduced && (
+            <div className="glass rounded-lg px-3 py-1.5 flex items-center gap-2 animate-pulse-glow">
+              <Eye className="w-3.5 h-3.5 text-yellow-400" />
+              <span className="text-yellow-400 text-xs font-medium">Gas detected!</span>
+            </div>
+          )}
+          {reactionState.hasPrecipitate && (
+            <div className="glass rounded-lg px-3 py-1.5 flex items-center gap-2 animate-pulse-glow">
+              <FlaskConical className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="text-cyan-400 text-xs font-medium">Precipitate forming</span>
+            </div>
+          )}
+        </div>
+
+        {/* Current step pill — top right */}
+        {!completed && (
+          <div className="absolute top-3 right-3 z-10 max-w-[200px]">
+            <div className="glass rounded-xl px-3 py-2">
+              <div className="flex items-center gap-2 mb-1">
+                <div className="w-5 h-5 rounded-full bg-cyan-500/30 border border-cyan-500/50 flex items-center justify-center text-cyan-400 font-bold text-[10px] shrink-0">
+                  {currentStep + 1}
                 </div>
-              )}
-              {reactionState.hasPrecipitate && (
-                <div className="glass rounded-lg px-3 py-2 flex items-center gap-2 animate-pulse-glow">
-                  <FlaskConical className="w-3.5 h-3.5 text-cyan-400" />
-                  <span className="text-cyan-400 text-xs font-medium">Precipitate forming</span>
-                </div>
-              )}
+                <span className="text-cyan-300 text-xs font-semibold truncate">{currentStepData?.title}</span>
+              </div>
+              <p className="text-slate-400 text-[11px] leading-snug line-clamp-2">{currentStepData?.desc}</p>
             </div>
           </div>
+        )}
 
-          {/* Step controls */}
-          <div className="border-t border-slate-800 bg-slate-900/80 p-4 space-y-3 shrink-0">
-            {completed ? (
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-green-500/20 border border-green-500/40 flex items-center justify-center">
-                    <CheckCircle className="w-5 h-5 text-green-400" />
-                  </div>
-                  <div>
-                    <p className="text-white font-semibold">Experiment Complete!</p>
-                    <p className="text-slate-400 text-sm">Score: <span className={`font-bold ${score >= 80 ? 'text-green-400' : score >= 60 ? 'text-yellow-400' : 'text-red-400'}`}>{score}%</span></p>
-                  </div>
-                </div>
-                <button onClick={handleExportPDF} disabled={exporting} className="lab-btn-primary flex items-center gap-2">
-                  <FileDown className="w-4 h-4" />
-                  Download PDF Report
-                </button>
+        {/* Completed overlay */}
+        {completed && (
+          <div className="absolute top-3 right-3 z-10">
+            <div className="glass rounded-xl px-4 py-3 flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full bg-green-500/20 border border-green-500/40 flex items-center justify-center">
+                <CheckCircle className="w-4 h-4 text-green-400" />
               </div>
-            ) : (
+              <div>
+                <p className="text-white text-xs font-semibold">Complete!</p>
+                <p className={`text-xs font-bold ${score >= 80 ? 'text-green-400' : score >= 60 ? 'text-yellow-400' : 'text-red-400'}`}>{score}%</p>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Step action bar ─────────────────────────────────────────────────── */}
+      <div className="shrink-0 bg-slate-900/95 border-t border-slate-800 px-4 py-2.5 flex items-center gap-2 z-10">
+        {completed ? (
+          <>
+            <CheckCircle className="w-4 h-4 text-green-400 shrink-0" />
+            <span className="text-white text-sm font-semibold flex-1">Experiment Complete — Score: <span className={`${score >= 80 ? 'text-green-400' : score >= 60 ? 'text-yellow-400' : 'text-red-400'}`}>{score}%</span></span>
+            <button onClick={handleExportPDF} disabled={exporting} className="flex items-center gap-1.5 px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-gray-900 rounded-lg text-sm font-semibold transition-colors disabled:opacity-50">
+              <FileDown className="w-4 h-4" />
+              Download PDF
+            </button>
+          </>
+        ) : (
+          <>
+            <button onClick={handleHint} className="flex items-center gap-1.5 px-3 py-2 bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-400 border border-yellow-500/30 rounded-lg text-xs font-medium transition-colors shrink-0">
+              <Lightbulb className="w-3.5 h-3.5" />
+              Hint
+            </button>
+            <div className="flex-1 min-w-0">
+              <p className="text-slate-300 text-xs font-medium truncate">Step {currentStep + 1}: {currentStepData?.title}</p>
+            </div>
+            <button onClick={handleNextStep} className="flex items-center gap-1.5 px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-gray-900 rounded-lg text-sm font-semibold transition-colors shrink-0">
+              {currentStep < steps.length - 1
+                ? <><ChevronRight className="w-4 h-4" />Next</>
+                : <><CheckCircle className="w-4 h-4" />Finish</>}
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* ── Bottom tool bar ──────────────────────────────────────────────────── */}
+      <div className="shrink-0 bg-slate-950 border-t border-slate-800 flex z-20">
+        {BOTTOM_TABS.map(({ id, label, icon: Icon, color }) => (
+          <button
+            key={id}
+            onClick={() => toggleTab(id)}
+            className={`flex-1 flex flex-col items-center gap-1 py-3 text-xs font-medium transition-all ${
+              activeTab === id
+                ? `${color} bg-slate-800`
+                : 'text-slate-500 hover:text-slate-300 hover:bg-slate-900'
+            }`}
+          >
+            <Icon className="w-5 h-5" />
+            {label}
+            {id === 'tutor' && aiMessages.length > 1 && activeTab !== 'tutor' && (
+              <span className="absolute mt-0 w-1.5 h-1.5 rounded-full bg-cyan-400 top-2 ml-5" />
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Slide-up drawer ──────────────────────────────────────────────────── */}
+      {/* Backdrop */}
+      {drawerOpen && (
+        <div
+          className="absolute inset-0 bg-black/40 z-30"
+          onClick={() => setActiveTab(null)}
+        />
+      )}
+
+      {/* Drawer panel */}
+      <div
+        className={`absolute left-0 right-0 bottom-0 z-40 flex flex-col bg-slate-900 border-t border-slate-700 rounded-t-2xl shadow-2xl transition-transform duration-300 ease-out`}
+        style={{
+          height: '58vh',
+          transform: drawerOpen ? 'translateY(0)' : 'translateY(100%)',
+        }}
+      >
+        {/* Drawer handle + header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 shrink-0">
+          <div className="flex items-center gap-2">
+            {activeTab === 'tutor' && (
               <>
-                <div className="flex items-start gap-3">
-                  <div className="w-7 h-7 rounded-full bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400 font-bold text-xs shrink-0 mt-0.5">
-                    {currentStep + 1}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-slate-100 font-semibold text-sm">{currentStepData?.title}</p>
-                    <p className="text-slate-400 text-sm mt-0.5">{currentStepData?.desc}</p>
-                  </div>
+                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-pink-400/30 to-cyan-500/30 border border-cyan-500/30 flex items-center justify-center">
+                  <Bot className="w-4 h-4 text-cyan-400" />
                 </div>
-                <div className="flex items-center gap-2">
-                  <button onClick={handleHint} className="flex items-center gap-1.5 px-3 py-1.5 bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-400 border border-yellow-500/30 rounded-lg text-xs font-medium transition-colors">
-                    <Lightbulb className="w-3.5 h-3.5" />
-                    Hint
-                  </button>
-                  <button onClick={() => setActiveTab('notes')} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 border border-slate-700 rounded-lg text-xs font-medium transition-colors">
-                    <NotebookPen className="w-3.5 h-3.5" />
-                    Notes
-                  </button>
-                  <button onClick={() => setActiveTab('calc')} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 border border-slate-700 rounded-lg text-xs font-medium transition-colors">
-                    <Calculator className="w-3.5 h-3.5" />
-                    Calculate
-                  </button>
-                  <button onClick={handleNextStep} className="ml-auto flex items-center gap-1.5 px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-gray-900 rounded-lg text-sm font-semibold transition-colors">
-                    {currentStep < steps.length - 1 ? <><ChevronRight className="w-4 h-4" />Next Step</> : <><CheckCircle className="w-4 h-4" />Complete</>}
-                  </button>
+                <div>
+                  <p className="text-slate-200 text-sm font-semibold">Aria — AI Tutor</p>
+                  <p className="text-slate-500 text-xs flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse inline-block" />
+                    {speaking ? 'Speaking...' : `Online · ${hintsUsed} hints used`}
+                  </p>
+                </div>
+              </>
+            )}
+            {activeTab === 'calc' && (
+              <>
+                <div className="w-7 h-7 rounded-full bg-violet-500/20 border border-violet-500/30 flex items-center justify-center">
+                  <Calculator className="w-4 h-4 text-violet-400" />
+                </div>
+                <div>
+                  <p className="text-slate-200 text-sm font-semibold">Chemistry Calculator</p>
+                  <p className="text-slate-500 text-xs">{calcLog.length} calculations done</p>
+                </div>
+              </>
+            )}
+            {activeTab === 'notes' && (
+              <>
+                <div className="w-7 h-7 rounded-full bg-amber-500/20 border border-amber-500/30 flex items-center justify-center">
+                  <NotebookPen className="w-4 h-4 text-amber-400" />
+                </div>
+                <div>
+                  <p className="text-slate-200 text-sm font-semibold">Observation Notes</p>
+                  <p className="text-slate-500 text-xs">{observations.length} chars recorded</p>
                 </div>
               </>
             )}
           </div>
+          <div className="flex items-center gap-2">
+            {activeTab === 'tutor' && (
+              <button
+                onClick={() => { setVoiceEnabled(!voiceEnabled); if (voiceEnabled) stopSpeaking(); }}
+                className={`p-1.5 rounded-lg transition-colors ${voiceEnabled ? 'text-pink-400 bg-pink-500/10 hover:bg-pink-500/20' : 'text-slate-600 hover:text-slate-400'}`}
+              >
+                {voiceEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+              </button>
+            )}
+            <button
+              onClick={() => setActiveTab(null)}
+              className="p-1.5 rounded-lg text-slate-500 hover:text-slate-200 hover:bg-slate-800 transition-colors"
+            >
+              <ChevronRight className="w-4 h-4 rotate-90" />
+            </button>
+          </div>
         </div>
 
-        {/* Right panel */}
-        <div className="w-72 xl:w-80 flex flex-col border-l border-slate-800 bg-slate-900 shrink-0">
-          {/* Tab header */}
-          <div className="flex border-b border-slate-800 shrink-0">
-            {TABS.map(({ id, label, icon: Icon }) => (
-              <button
-                key={id}
-                onClick={() => setActiveTab(id)}
-                className={`flex-1 flex flex-col items-center gap-1 py-2.5 text-xs font-medium transition-all border-b-2 ${
-                  activeTab === id
-                    ? 'border-cyan-500 text-cyan-400 bg-cyan-500/5'
-                    : 'border-transparent text-slate-500 hover:text-slate-300 hover:bg-slate-800/50'
-                }`}
-              >
-                <Icon className="w-4 h-4" />
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {/* ── AI Tutor Tab ── */}
-          {activeTab === 'tutor' && (
-            <>
-              <div className="flex items-center gap-2 px-4 py-2.5 border-b border-slate-800 shrink-0">
-                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-pink-400/30 to-cyan-500/30 border border-cyan-500/30 flex items-center justify-center">
-                  <Bot className="w-4 h-4 text-cyan-400" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-slate-200 text-xs font-semibold">Aria — AI Tutor</p>
-                  <p className="text-slate-500 text-xs flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse inline-block" />
-                    {speaking ? 'Speaking...' : `Online · ${hintsUsed} hints`}
-                  </p>
-                </div>
-                <button
-                  onClick={() => { setVoiceEnabled(!voiceEnabled); if (voiceEnabled) stopSpeaking(); }}
-                  className={`p-1.5 rounded-lg transition-colors ${voiceEnabled ? 'text-pink-400 bg-pink-500/10 hover:bg-pink-500/20' : 'text-slate-600 hover:text-slate-400'}`}
-                  title={voiceEnabled ? 'Mute AI voice' : 'Unmute AI voice'}
-                >
-                  {voiceEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
-                </button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-3 space-y-3">
-                {aiMessages.map((msg, i) => (
-                  <div key={i} className={`flex gap-2 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
-                    {msg.role === 'ai' && (
-                      <div className="w-6 h-6 rounded-full bg-gradient-to-br from-pink-400/30 to-cyan-500/30 border border-cyan-500/30 flex items-center justify-center shrink-0 mt-1">
-                        <Bot className="w-3.5 h-3.5 text-cyan-400" />
-                      </div>
-                    )}
-                    <div className={`max-w-[85%] group relative ${msg.role === 'user' ? '' : 'flex-1'}`}>
-                      <div className={`px-3 py-2 rounded-xl text-xs leading-relaxed ${
-                        msg.role === 'user'
-                          ? 'bg-cyan-500/20 text-cyan-100 rounded-br-sm'
-                          : msg.type === 'hint'
-                          ? 'bg-yellow-500/10 border border-yellow-500/20 text-yellow-100 rounded-bl-sm'
-                          : 'bg-slate-800 text-slate-200 rounded-bl-sm'
-                      }`}>
-                        {msg.type === 'hint' && <p className="text-yellow-500 text-xs font-semibold mb-1">AI Hint</p>}
-                        {msg.text}
-                      </div>
-                      {msg.role === 'ai' && (
-                        <button
-                          onClick={() => speak(msg.text)}
-                          className="mt-1 ml-1 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity text-slate-600 hover:text-pink-400 hover:bg-pink-500/10"
-                          title="Play voice"
-                        >
-                          <Volume2 className="w-3 h-3" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-                {aiTyping && (
-                  <div className="flex gap-2">
-                    <div className="w-6 h-6 rounded-full bg-gradient-to-br from-pink-400/30 to-cyan-500/30 border border-cyan-500/30 flex items-center justify-center shrink-0">
+        {/* ── AI Tutor content ── */}
+        {activeTab === 'tutor' && (
+          <>
+            <div className="flex-1 overflow-y-auto p-3 space-y-3">
+              {aiMessages.map((msg, i) => (
+                <div key={i} className={`flex gap-2 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+                  {msg.role === 'ai' && (
+                    <div className="w-6 h-6 rounded-full bg-gradient-to-br from-pink-400/30 to-cyan-500/30 border border-cyan-500/30 flex items-center justify-center shrink-0 mt-1">
                       <Bot className="w-3.5 h-3.5 text-cyan-400" />
                     </div>
-                    <div className="bg-slate-800 px-4 py-3 rounded-xl rounded-bl-sm">
-                      <div className="flex gap-1">
-                        {[0, 1, 2].map(j => <div key={j} className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: `${j * 0.15}s` }} />)}
-                      </div>
+                  )}
+                  <div className={`max-w-[85%] group relative ${msg.role === 'user' ? '' : 'flex-1'}`}>
+                    <div className={`px-3 py-2 rounded-xl text-xs leading-relaxed ${
+                      msg.role === 'user'
+                        ? 'bg-cyan-500/20 text-cyan-100 rounded-br-sm'
+                        : msg.type === 'hint'
+                        ? 'bg-yellow-500/10 border border-yellow-500/20 text-yellow-100 rounded-bl-sm'
+                        : 'bg-slate-800 text-slate-200 rounded-bl-sm'
+                    }`}>
+                      {msg.type === 'hint' && <p className="text-yellow-500 text-xs font-semibold mb-1">AI Hint</p>}
+                      {msg.text}
+                    </div>
+                    {msg.role === 'ai' && (
+                      <button
+                        onClick={() => speak(msg.text)}
+                        className="mt-1 ml-1 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity text-slate-600 hover:text-pink-400 hover:bg-pink-500/10"
+                      >
+                        <Volume2 className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {aiTyping && (
+                <div className="flex gap-2">
+                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-pink-400/30 to-cyan-500/30 border border-cyan-500/30 flex items-center justify-center shrink-0">
+                    <Bot className="w-3.5 h-3.5 text-cyan-400" />
+                  </div>
+                  <div className="bg-slate-800 px-4 py-3 rounded-xl rounded-bl-sm">
+                    <div className="flex gap-1">
+                      {[0, 1, 2].map(j => <div key={j} className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: `${j * 0.15}s` }} />)}
                     </div>
                   </div>
-                )}
-                <div ref={aiEndRef} />
-              </div>
-
-              <div className="p-3 border-t border-slate-800 shrink-0">
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={aiInput}
-                    onChange={e => setAiInput(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAiSend(); } }}
-                    placeholder="Ask Aria anything..."
-                    className="lab-input text-xs flex-1"
-                    disabled={aiTyping}
-                  />
-                  <button
-                    onClick={handleAiSend}
-                    disabled={!aiInput.trim() || aiTyping}
-                    className="p-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-gray-900 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <Send className="w-4 h-4" />
-                  </button>
                 </div>
-              </div>
-            </>
-          )}
-
-          {/* ── Calculations Tab ── */}
-          {activeTab === 'calc' && (
-            <div className="flex-1 overflow-y-auto">
-              <div className="p-3 border-b border-slate-800 bg-slate-950/30 shrink-0">
-                <p className="text-slate-200 text-xs font-semibold">Chemistry Formula Calculator</p>
-                <p className="text-slate-500 text-xs mt-0.5">Enter values to calculate results instantly</p>
-              </div>
-              <div className="p-3 space-y-3">
-                {FORMULAS.map(f => <FormulaCard key={f.id} formula={f} onResult={addCalcEntry} />)}
-              </div>
+              )}
+              <div ref={aiEndRef} />
             </div>
-          )}
-
-          {/* ── Notes Tab ── */}
-          {activeTab === 'notes' && (
-            <div className="flex-1 flex flex-col overflow-hidden">
-              <div className="px-4 py-2.5 border-b border-slate-800 shrink-0">
-                <p className="text-slate-200 text-xs font-semibold">Observation Notes</p>
-                <p className="text-slate-500 text-xs mt-0.5">Record what you observe during the experiment</p>
-              </div>
-
-              {/* Quick-insert buttons */}
-              <div className="px-3 py-2 border-b border-slate-800 flex flex-wrap gap-1.5 shrink-0">
+            <div className="p-3 border-t border-slate-800 shrink-0">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={aiInput}
+                  onChange={e => setAiInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAiSend(); } }}
+                  placeholder="Ask Aria anything..."
+                  className="lab-input text-sm flex-1"
+                  disabled={aiTyping}
+                />
                 <button
-                  onClick={addNoteTimestamp}
-                  className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded text-xs transition-colors"
+                  onClick={handleAiSend}
+                  disabled={!aiInput.trim() || aiTyping}
+                  className="p-2.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-gray-900 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  + Timestamp
-                </button>
-                {['Color change', 'Gas produced', 'Precipitate', 'Temperature↑', 'Odor noted'].map(tag => (
-                  <button
-                    key={tag}
-                    onClick={() => setObservations(prev => prev + (prev && !prev.endsWith('\n') ? '\n' : '') + `• ${tag}\n`)}
-                    className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-cyan-400 rounded text-xs transition-colors"
-                  >
-                    {tag}
-                  </button>
-                ))}
-              </div>
-
-              <textarea
-                value={observations}
-                onChange={e => setObservations(e.target.value)}
-                placeholder={`Step ${currentStep + 1} observations:\n• What do you see?\n• Any color change?\n• Temperature change?\n• Gas or precipitate?`}
-                className="flex-1 bg-transparent border-0 resize-none text-slate-200 text-xs p-4 placeholder-slate-600 focus:outline-none leading-relaxed font-mono"
-              />
-
-              <div className="px-4 py-2.5 border-t border-slate-800 flex items-center justify-between shrink-0">
-                <span className="text-slate-600 text-xs">{observations.length} chars · {observations.split('\n').filter(Boolean).length} lines</span>
-                <button
-                  onClick={() => setObservations('')}
-                  className="text-xs text-slate-600 hover:text-red-400 transition-colors"
-                  disabled={!observations}
-                >
-                  Clear
+                  <Send className="w-4 h-4" />
                 </button>
               </div>
             </div>
-          )}
-        </div>
+          </>
+        )}
+
+        {/* ── Calculator content ── */}
+        {activeTab === 'calc' && (
+          <div className="flex-1 overflow-y-auto">
+            <div className="p-3 space-y-3">
+              {FORMULAS.map(f => <FormulaCard key={f.id} formula={f} onResult={addCalcEntry} />)}
+            </div>
+          </div>
+        )}
+
+        {/* ── Notes content ── */}
+        {activeTab === 'notes' && (
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="px-3 py-2 border-b border-slate-800 flex flex-wrap gap-1.5 shrink-0">
+              <button
+                onClick={addNoteTimestamp}
+                className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded text-xs transition-colors"
+              >
+                + Timestamp
+              </button>
+              {['Color change', 'Gas produced', 'Precipitate', 'Temperature↑', 'Odor noted'].map(tag => (
+                <button
+                  key={tag}
+                  onClick={() => setObservations(prev => prev + (prev && !prev.endsWith('\n') ? '\n' : '') + `• ${tag}\n`)}
+                  className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-amber-400 rounded text-xs transition-colors"
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+            <textarea
+              value={observations}
+              onChange={e => setObservations(e.target.value)}
+              placeholder={`Step ${currentStep + 1} observations:\n• What do you see?\n• Any color change?\n• Temperature change?\n• Gas or precipitate?`}
+              className="flex-1 bg-transparent border-0 resize-none text-slate-200 text-sm p-4 placeholder-slate-600 focus:outline-none leading-relaxed font-mono"
+            />
+            <div className="px-4 py-2 border-t border-slate-800 flex items-center justify-between shrink-0">
+              <span className="text-slate-600 text-xs">{observations.length} chars · {observations.split('\n').filter(Boolean).length} lines</span>
+              <button onClick={() => setObservations('')} className="text-xs text-slate-600 hover:text-red-400 transition-colors" disabled={!observations}>
+                Clear
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
