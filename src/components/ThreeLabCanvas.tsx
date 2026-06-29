@@ -156,9 +156,9 @@ export default function ThreeLabCanvas({
     // ─── Interactive Lab Equipment ─────────────────────────────────────────
     const interactiveObjects: THREE.Mesh[] = [];
     const glassMat = new THREE.MeshPhysicalMaterial({
-      color: 0xd0e8ff, transparent: true, opacity: 0.25,
-      roughness: 0.05, metalness: 0, transmission: 0.95,
-      thickness: 0.5, envMapIntensity: 1,
+      color: 0xe8f4ff, transparent: true, opacity: 0.2,
+      roughness: 0.02, metalness: 0, transmission: 0.96,
+      thickness: 0.3, envMapIntensity: 1.2,
     });
 
     // Main Erlenmeyer Flask
@@ -194,13 +194,16 @@ export default function ThreeLabCanvas({
     flaskBottom.rotation.x = -Math.PI / 2;
     flaskGroup.add(flaskBottom);
 
-    // Liquid inside flask
+    // Liquid inside flask — color driven by experiment reaction
     const { r, g, b } = hexToRGB(reactionColor);
-    const liquidMat = new THREE.MeshStandardMaterial({
+    const liquidMat = new THREE.MeshPhysicalMaterial({
       color: new THREE.Color(r, g, b),
+      emissive: new THREE.Color(r * 0.4, g * 0.4, b * 0.4),
+      emissiveIntensity: 0.3,
       transparent: true,
-      opacity: 0.7,
-      roughness: 0.1,
+      opacity: 0.82,
+      roughness: 0.06,
+      transmission: 0.15,
     });
     const liquidGeo = new THREE.CylinderGeometry(0.58, 0.63, 0.5, 32);
     const liquid = new THREE.Mesh(liquidGeo, liquidMat);
@@ -221,10 +224,18 @@ export default function ThreeLabCanvas({
     buretteGroup.add(buretteTube);
     interactiveObjects.push(buretteTube);
 
-    // Burette liquid
+    // Burette liquid — NaOH (aq), faintly blue-clear
     const buretteLiquid = new THREE.Mesh(
       new THREE.CylinderGeometry(0.055, 0.055, 1.8, 12),
-      new THREE.MeshStandardMaterial({ color: 0x88ccff, transparent: true, opacity: 0.6 })
+      new THREE.MeshPhysicalMaterial({
+        color: 0x90caf9,
+        emissive: 0x1565c0,
+        emissiveIntensity: 0.15,
+        transparent: true,
+        opacity: 0.65,
+        roughness: 0.04,
+        transmission: 0.3,
+      })
     );
     buretteLiquid.position.y = 1.5;
     buretteGroup.add(buretteLiquid);
@@ -256,32 +267,62 @@ export default function ThreeLabCanvas({
     testTubesGroup.position.set(isVRMode ? -2.5 : -2.2, isVRMode ? 0.9 : -0.42, isVRMode ? -3 : 0);
     scene.add(testTubesGroup);
 
-    const tubeColors = [0xff6b6b, 0xffd700, 0x88ccff, 0x88ff88];
+    // Real chemistry liquid colors: CuSO4, K2Cr2O7, NiSO4, KMnO4
+    const chemTubes = [
+      { color: 0x1565c0, emissive: 0x0d47a1, name: 'CuSO₄ (aq)' },
+      { color: 0xf57f17, emissive: 0xe65100, name: 'K₂Cr₂O₇ (aq)' },
+      { color: 0x2e7d32, emissive: 0x1b5e20, name: 'NiSO₄ (aq)' },
+      { color: 0x4a148c, emissive: 0x6a0080, name: 'KMnO₄ (aq)' },
+    ];
     for (let i = 0; i < 4; i++) {
       const tube = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.06, 0.06, 0.7, 12, 1, true),
-        new THREE.MeshPhysicalMaterial({ color: 0xd0e8ff, transparent: true, opacity: 0.3 })
+        new THREE.CylinderGeometry(0.062, 0.058, 0.72, 16, 1, true),
+        new THREE.MeshPhysicalMaterial({ color: 0xe8f4ff, transparent: true, opacity: 0.22, roughness: 0.02, transmission: 0.95 })
       );
       tube.position.set(i * 0.22 - 0.33, 0.55, 0);
-      tube.userData = { name: `Test Tube ${i + 1}`, interactive: true };
+      tube.userData = { name: chemTubes[i].name, interactive: true };
       testTubesGroup.add(tube);
       interactiveObjects.push(tube);
 
-      const tubeLiquid = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.05, 0.05, 0.2 + i * 0.05, 12),
-        new THREE.MeshStandardMaterial({ color: tubeColors[i], transparent: true, opacity: 0.8 })
+      // Tube bottom cap
+      const cap = new THREE.Mesh(
+        new THREE.SphereGeometry(0.058, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2),
+        new THREE.MeshPhysicalMaterial({ color: 0xe8f4ff, transparent: true, opacity: 0.22, roughness: 0.02, transmission: 0.95 })
       );
-      tubeLiquid.position.set(i * 0.22 - 0.33, 0.1 + i * 0.03, 0);
+      cap.rotation.x = Math.PI;
+      cap.position.set(i * 0.22 - 0.33, 0.19, 0);
+      testTubesGroup.add(cap);
+
+      const fillH = 0.18 + i * 0.06;
+      const tubeLiquid = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.05, 0.05, fillH, 16),
+        new THREE.MeshPhysicalMaterial({
+          color: chemTubes[i].color,
+          emissive: chemTubes[i].emissive,
+          emissiveIntensity: 0.3,
+          transparent: true,
+          opacity: 0.88,
+          roughness: 0.06,
+          transmission: 0.1,
+        })
+      );
+      tubeLiquid.position.set(i * 0.22 - 0.33, 0.2 + fillH / 2, 0);
       testTubesGroup.add(tubeLiquid);
     }
 
-    // Rack bar
+    // Rack bars (top + bottom)
     const rack = new THREE.Mesh(
-      new THREE.BoxGeometry(1, 0.05, 0.15),
-      new THREE.MeshStandardMaterial({ color: 0x334455 })
+      new THREE.BoxGeometry(1, 0.04, 0.14),
+      new THREE.MeshStandardMaterial({ color: 0x263238, roughness: 0.7 })
     );
     rack.position.set(0, 0.02, 0);
     testTubesGroup.add(rack);
+    const rackTop = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 0.04, 0.14),
+      new THREE.MeshStandardMaterial({ color: 0x263238, roughness: 0.7 })
+    );
+    rackTop.position.set(0, 0.92, 0);
+    testTubesGroup.add(rackTop);
 
     // ─── Beaker with stirrer ─────────────────────────────────────────────────
     const beakerGroup = new THREE.Group();
@@ -301,12 +342,29 @@ export default function ThreeLabCanvas({
     beakerBottom.rotation.x = -Math.PI / 2;
     beakerGroup.add(beakerBottom);
 
+    // NaOH (aq) — faintly blue-tinted, clear alkaline solution
     const beakerLiquid = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.35, 0.30, 0.45, 24),
-      new THREE.MeshStandardMaterial({ color: 0xaaddff, transparent: true, opacity: 0.6 })
+      new THREE.CylinderGeometry(0.345, 0.305, 0.48, 24),
+      new THREE.MeshPhysicalMaterial({
+        color: 0x4fc3f7,
+        emissive: 0x01579b,
+        emissiveIntensity: 0.2,
+        transparent: true,
+        opacity: 0.72,
+        roughness: 0.05,
+        transmission: 0.25,
+      })
     );
-    beakerLiquid.position.y = 0.22;
+    beakerLiquid.position.y = 0.24;
     beakerGroup.add(beakerLiquid);
+    // Surface meniscus
+    const beakerSurface = new THREE.Mesh(
+      new THREE.CircleGeometry(0.345, 24),
+      new THREE.MeshPhysicalMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.5, roughness: 0.05 })
+    );
+    beakerSurface.rotation.x = -Math.PI / 2;
+    beakerSurface.position.y = 0.48;
+    beakerGroup.add(beakerSurface);
 
     // Stirring rod
     const stirrer = new THREE.Mesh(
@@ -533,8 +591,9 @@ export default function ThreeLabCanvas({
     if (!sceneRef.current) return;
     const { r, g, b } = hexToRGB(reactionColor);
     const liquidMesh = sceneRef.current.liquid;
-    const mat = liquidMesh.material as THREE.MeshStandardMaterial;
+    const mat = liquidMesh.material as THREE.MeshPhysicalMaterial;
     mat.color.setRGB(r, g, b);
+    mat.emissive.setRGB(r * 0.4, g * 0.4, b * 0.4);
     mat.needsUpdate = true;
   }, [reactionColor]);
 

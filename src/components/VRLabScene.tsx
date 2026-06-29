@@ -16,9 +16,33 @@ export interface VRLabRoomRefs {
 }
 
 const GLASS_MAT = new THREE.MeshPhysicalMaterial({
-  color: 0xd0e8ff, transparent: true, opacity: 0.25,
-  roughness: 0.05, metalness: 0, transmission: 0.9, thickness: 0.5,
+  color: 0xe8f4ff, transparent: true, opacity: 0.22,
+  roughness: 0.02, metalness: 0, transmission: 0.95, thickness: 0.3,
 });
+
+// Real chemistry liquid colors with emissive glow
+const CHEM_LIQUIDS: { color: number; emissive: number; name: string }[] = [
+  { color: 0x1565c0, emissive: 0x0d47a1, name: 'CuSO₄ (aq)' },       // Copper sulfate — deep blue
+  { color: 0xb71c1c, emissive: 0x7f0000, name: 'Co(NO₃)₂ (aq)' },    // Cobalt nitrate — red
+  { color: 0xf57f17, emissive: 0xe65100, name: 'K₂Cr₂O₇ (aq)' },     // Potassium dichromate — orange
+  { color: 0x2e7d32, emissive: 0x1b5e20, name: 'NiSO₄ (aq)' },       // Nickel sulfate — green
+  { color: 0x4a148c, emissive: 0x6a0080, name: 'KMnO₄ (aq)' },       // Potassium permanganate — purple
+  { color: 0x795548, emissive: 0x4e342e, name: 'I₂ / KI (aq)' },     // Iodine in KI — amber-brown
+];
+
+function makeChemLiquidMat(idx: number) {
+  const c = CHEM_LIQUIDS[idx % CHEM_LIQUIDS.length];
+  return new THREE.MeshPhysicalMaterial({
+    color: c.color,
+    emissive: c.emissive,
+    emissiveIntensity: 0.25,
+    transparent: true,
+    opacity: 0.82,
+    roughness: 0.08,
+    metalness: 0,
+    transmission: 0.15,
+  });
+}
 
 function makeLabel(text: string, color = '#00e5ff'): THREE.Sprite {
   const canvas = document.createElement('canvas');
@@ -44,7 +68,7 @@ function makeLabel(text: string, color = '#00e5ff'): THREE.Sprite {
   return sprite;
 }
 
-function createBeakerSet(position: THREE.Vector3, liquidColor: number): THREE.Group {
+function createBeakerSet(position: THREE.Vector3, chemIdx: number): THREE.Group {
   const g = new THREE.Group();
   g.position.copy(position);
   const beaker = new THREE.Mesh(
@@ -54,16 +78,29 @@ function createBeakerSet(position: THREE.Vector3, liquidColor: number): THREE.Gr
   beaker.position.y = 0.35;
   beaker.userData = { name: 'Beaker', interactive: true };
   g.add(beaker);
+  // Bottom disk
+  const bottom = new THREE.Mesh(new THREE.CircleGeometry(0.3, 24), GLASS_MAT);
+  bottom.rotation.x = -Math.PI / 2;
+  g.add(bottom);
+  // Liquid with meniscus (slightly concave top)
   const liquid = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.3, 0.26, 0.4, 24),
-    new THREE.MeshStandardMaterial({ color: liquidColor, transparent: true, opacity: 0.7 })
+    new THREE.CylinderGeometry(0.29, 0.26, 0.38, 24),
+    makeChemLiquidMat(chemIdx)
   );
-  liquid.position.y = 0.2;
+  liquid.position.y = 0.19;
   g.add(liquid);
+  // Meniscus disc
+  const meniscus = new THREE.Mesh(
+    new THREE.CircleGeometry(0.29, 24),
+    makeChemLiquidMat(chemIdx)
+  );
+  meniscus.rotation.x = -Math.PI / 2;
+  meniscus.position.y = 0.38;
+  g.add(meniscus);
   return g;
 }
 
-function createFlaskSet(position: THREE.Vector3, liquidColor: number): THREE.Group {
+function createFlaskSet(position: THREE.Vector3, chemIdx: number): THREE.Group {
   const g = new THREE.Group();
   g.position.copy(position);
   const body = new THREE.Mesh(
@@ -73,6 +110,9 @@ function createFlaskSet(position: THREE.Vector3, liquidColor: number): THREE.Gro
   body.position.y = 0.45;
   body.userData = { name: 'Erlenmeyer Flask', interactive: true };
   g.add(body);
+  const bottom = new THREE.Mesh(new THREE.CircleGeometry(0.6, 32), GLASS_MAT);
+  bottom.rotation.x = -Math.PI / 2;
+  g.add(bottom);
   const neck = new THREE.Mesh(
     new THREE.CylinderGeometry(0.14, 0.3, 0.5, 16, 1, true),
     GLASS_MAT
@@ -80,31 +120,55 @@ function createFlaskSet(position: THREE.Vector3, liquidColor: number): THREE.Gro
   neck.position.y = 1.15;
   g.add(neck);
   const liquid = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.5, 0.55, 0.4, 32),
-    new THREE.MeshStandardMaterial({ color: liquidColor, transparent: true, opacity: 0.7 })
+    new THREE.CylinderGeometry(0.48, 0.57, 0.45, 32),
+    makeChemLiquidMat(chemIdx)
   );
-  liquid.position.y = 0.2;
+  liquid.position.y = 0.22;
   g.add(liquid);
+  // Surface disc
+  const surface = new THREE.Mesh(new THREE.CircleGeometry(0.48, 32), makeChemLiquidMat(chemIdx));
+  surface.rotation.x = -Math.PI / 2;
+  surface.position.y = 0.445;
+  g.add(surface);
   return g;
 }
 
 function createTestTubeRack(position: THREE.Vector3): THREE.Group {
   const g = new THREE.Group();
   g.position.copy(position);
-  const colors = [0xff6b6b, 0xffd700, 0x88ccff, 0x88ff88];
+  // Rack base
+  const rackBase = new THREE.Mesh(
+    new THREE.BoxGeometry(0.8, 0.05, 0.18),
+    new THREE.MeshStandardMaterial({ color: 0x263238, roughness: 0.7 })
+  );
+  rackBase.position.y = 0.025;
+  g.add(rackBase);
+  const rackTop = new THREE.Mesh(
+    new THREE.BoxGeometry(0.8, 0.04, 0.18),
+    new THREE.MeshStandardMaterial({ color: 0x263238, roughness: 0.7 })
+  );
+  rackTop.position.y = 0.6;
+  g.add(rackTop);
   for (let i = 0; i < 4; i++) {
+    const xPos = i * 0.18 - 0.27;
     const tube = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.05, 0.05, 0.6, 12, 1, true),
-      GLASS_MAT
+      new THREE.CylinderGeometry(0.055, 0.052, 0.65, 16, 1, true),
+      GLASS_MAT.clone()
     );
-    tube.position.set(i * 0.18 - 0.27, 0.45, 0);
-    tube.userData = { name: `Test Tube ${i + 1}`, interactive: true };
+    tube.position.set(xPos, 0.42, 0);
+    tube.userData = { name: CHEM_LIQUIDS[i].name, interactive: true };
     g.add(tube);
+    // Tube bottom cap
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.052, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2), GLASS_MAT);
+    cap.rotation.x = Math.PI;
+    cap.position.set(xPos, 0.095, 0);
+    g.add(cap);
+    const fillHeight = 0.15 + i * 0.06;
     const liq = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.04, 0.04, 0.18, 12),
-      new THREE.MeshStandardMaterial({ color: colors[i], transparent: true, opacity: 0.8 })
+      new THREE.CylinderGeometry(0.044, 0.044, fillHeight, 16),
+      makeChemLiquidMat(i)
     );
-    liq.position.set(i * 0.18 - 0.27, 0.08 + i * 0.02, 0);
+    liq.position.set(xPos, 0.098 + fillHeight / 2, 0);
     g.add(liq);
   }
   return g;
@@ -129,7 +193,8 @@ function createBurette(position: THREE.Vector3): THREE.Group {
   return g;
 }
 
-const STATION_COLORS = [0x88ccff, 0xff6b6b, 0xffd700, 0x88ff88, 0xff8c00, 0x40e0d0];
+// Chemical index cycles through CHEM_LIQUIDS per station
+
 
 export function buildVRLabRoom(stations: ExperimentStationData[]): VRLabRoomRefs {
   const group = new THREE.Group();
@@ -198,7 +263,7 @@ export function buildVRLabRoom(stations: ExperimentStationData[]): VRLabRoomRefs
     const angle = (i / stationCount) * Math.PI * 2;
     const x = Math.cos(angle) * radius;
     const z = Math.sin(angle) * radius;
-    const color = STATION_COLORS[i % STATION_COLORS.length];
+    const chemIdx = i % CHEM_LIQUIDS.length;
 
     // Bench
     const benchGroup = new THREE.Group();
@@ -224,24 +289,26 @@ export function buildVRLabRoom(stations: ExperimentStationData[]): VRLabRoomRefs
     });
 
     // Equipment on bench (varies by index for visual variety)
-    const eqPos = new THREE.Vector3();
     if (i % 4 === 0) {
-      const set = createFlaskSet(new THREE.Vector3(-0.5, 0.91, 0), color);
+      const set = createFlaskSet(new THREE.Vector3(-0.5, 0.91, 0), chemIdx);
       benchGroup.add(set);
-      eqPos.copy(set.position);
+      const bur = createBurette(new THREE.Vector3(0.6, 0.91, 0));
+      benchGroup.add(bur);
     } else if (i % 4 === 1) {
-      const set = createBeakerSet(new THREE.Vector3(0.5, 0.91, 0), color);
+      const set = createBeakerSet(new THREE.Vector3(-0.3, 0.91, 0), chemIdx);
       benchGroup.add(set);
+      const rack = createTestTubeRack(new THREE.Vector3(0.5, 0.91, 0));
+      benchGroup.add(rack);
     } else if (i % 4 === 2) {
       const rack = createTestTubeRack(new THREE.Vector3(-0.3, 0.91, 0));
       benchGroup.add(rack);
       const bur = createBurette(new THREE.Vector3(0.6, 0.91, 0));
       benchGroup.add(bur);
     } else {
-      const set = createFlaskSet(new THREE.Vector3(0, 0.91, 0), color);
+      const set = createFlaskSet(new THREE.Vector3(0, 0.91, 0), chemIdx);
       benchGroup.add(set);
-      const bur = createBurette(new THREE.Vector3(0.7, 0.91, 0));
-      benchGroup.add(bur);
+      const rack = createTestTubeRack(new THREE.Vector3(0.7, 0.91, 0));
+      benchGroup.add(rack);
     }
 
     // Collect interactive objects

@@ -87,17 +87,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function signUp(email: string, password: string, name: string, studentId: string, className: string) {
-    const { data, error } = await supabase.auth.signUp({ email, password });
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { full_name: name, student_id: studentId, class_name: className },
+      },
+    });
     if (error) return { error: error.message };
     if (data.user) {
-      const { error: profileError } = await supabase.from('profiles').insert({
-        id: data.user.id,
-        role: 'student',
-        full_name: name,
-        student_id: studentId,
-        class_name: className,
-      });
-      if (profileError) return { error: profileError.message };
+      // Trigger auto-creates the profile; upsert ensures correct data even if trigger ran first
+      const { error: upsertError } = await supabase.from('profiles').upsert(
+        { id: data.user.id, role: 'student', full_name: name, student_id: studentId, class_name: className },
+        { onConflict: 'id' }
+      );
+      if (upsertError && upsertError.code !== '42501') {
+        return { error: upsertError.message };
+      }
       await fetchProfile(data.user.id);
     }
     return { error: null };
