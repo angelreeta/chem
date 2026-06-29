@@ -112,7 +112,7 @@ export default function ThreeLabCanvas({
     }
 
     // ── Renderer ───────────────────────────────────────────────────────────
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, xrCompatible: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(width, height);
     renderer.setPixelRatio(isPerfMode ? 1 : Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = !isPerfMode;

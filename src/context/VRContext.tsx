@@ -52,8 +52,8 @@ export function VRProvider({ children }: { children: ReactNode }) {
     setIsVRMode(true);
     requestFullscreen();
     // Lock orientation to landscape for VR
-    if (screen.orientation && screen.orientation.lock) {
-      screen.orientation.lock('landscape').catch(() => {});
+    if (screen.orientation && 'lock' in screen.orientation) {
+      (screen.orientation.lock as (orientation: string) => Promise<void>)('landscape').catch(() => {});
     }
     // Request device orientation permission on iOS
     if (typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
