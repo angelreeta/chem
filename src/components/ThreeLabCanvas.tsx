@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { buildVRLabRoom, ExperimentStationData } from './VRLabScene';
 
+// ─── Types ──────────────────────────────────────────────────────────────────
 interface Props {
   reactionColor: string;
   hasGas: boolean;
@@ -12,15 +13,26 @@ interface Props {
   isPerfMode?: boolean;
   experimentStations?: ExperimentStationData[];
   onObjectClick?: (objectName: string) => void;
+  onPour?: (from: string, to: string) => void;
 }
 
-function hexToRGB(hex: string): { r: number; g: number; b: number } {
-  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-  return result
-    ? { r: parseInt(result[1], 16) / 255, g: parseInt(result[2], 16) / 255, b: parseInt(result[3], 16) / 255 }
-    : { r: 0.9, g: 0.95, b: 1 };
+interface EquipmentEntry {
+  mesh: THREE.Object3D;
+  liquid: THREE.Mesh | null;
+  position: THREE.Vector3;
+  baseEmissive: THREE.Color;
+  baseMat: THREE.MeshPhysicalMaterial | null;
 }
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+function hexToRGB(hex: string) {
+  const r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return r ? { r: parseInt(r[1], 16) / 255, g: parseInt(r[2], 16) / 255, b: parseInt(r[3], 16) / 255 } : { r: 0.9, g: 0.95, b: 1 };
+}
+
+function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
+
+// ─── Main Component ──────────────────────────────────────────────────────────
 export default function ThreeLabCanvas({
   reactionColor,
   hasGas,
@@ -31,9 +43,18 @@ export default function ThreeLabCanvas({
   isPerfMode = false,
   experimentStations = [],
   onObjectClick,
+  onPour,
 }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
-  const [selectedObject, setSelectedObject] = useState<string | null>(null);
+  const [heldItem, setHeldItem] = useState<string | null>(null);
+  const [gazeTarget, setGazeTarget] = useState<string | null>(null);
+  const [gazeProgress, setGazeProgress] = useState(0);
+  const [interactionMsg, setInteractionMsg] = useState<string | null>(null);
+
+  // Mutable state held in refs to avoid stale closures inside useEffect
+  const heldRef = useRef<string | null>(null);
+  const interactionRef = useRef<Map<string, EquipmentEntry>>(new Map());
+  const pourRef = useRef<THREE.Points[]>([]);
   const sceneRef = useRef<{
     renderer: THREE.WebGLRenderer;
     scene: THREE.Scene;
@@ -41,18 +62,17 @@ export default function ThreeLabCanvas({
     leftCamera: THREE.PerspectiveCamera;
     rightCamera: THREE.PerspectiveCamera;
     frameId: number;
-    flask: THREE.Mesh;
     liquid: THREE.Mesh;
+    buretteLiquid: THREE.Mesh;
     particles: THREE.Points[];
-    burette: THREE.Group;
-    testTubes: THREE.Group[];
-    beaker: THREE.Mesh;
     time: number;
-    labRoom?: THREE.Group;
-    vrInteractiveObjects?: THREE.Object3D[];
-    vrSession?: XRSession | null;
-    deviceOrientation?: { alpha: number; beta: number; gamma: number };
   } | null>(null);
+
+  // ─── Flash interaction message ────────────────────────────────────────────
+  function flashMsg(msg: string) {
+    setInteractionMsg(msg);
+    setTimeout(() => setInteractionMsg(null), 2500);
+  }
 
   useEffect(() => {
     if (!mountRef.current) return;
@@ -60,39 +80,39 @@ export default function ThreeLabCanvas({
     const width = mountRef.current.clientWidth;
     const height = mountRef.current.clientHeight;
 
-    // Scene
+    // ── Scene ──────────────────────────────────────────────────────────────
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0a0f1e);
 
-    // Camera - adjusted for VR mode (different FOV)
-    const camera = new THREE.PerspectiveCamera(
-      isVRMode ? 75 : 45,
-      width / height,
-      0.1,
-      isVRMode ? 1000 : 100
-    );
+    // ── Camera ─────────────────────────────────────────────────────────────
+    const camera = new THREE.PerspectiveCamera(isVRMode ? 75 : 52, width / height, 0.1, isVRMode ? 1000 : 100);
+    const eyeSep = 0.064;
+    const leftCamera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
+    const rightCamera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
+
+    // Orbit state (normal mode)
+    const orbit = { theta: 0, phi: Math.PI / 7, radius: isVRMode ? 0 : 7 };
+
+    function applyOrbitCamera() {
+      if (isVRMode) return;
+      const x = orbit.radius * Math.sin(orbit.theta) * Math.cos(orbit.phi);
+      const y = Math.max(0.5, orbit.radius * Math.sin(orbit.phi));
+      const z = orbit.radius * Math.cos(orbit.theta) * Math.cos(orbit.phi);
+      camera.position.set(x, y + 0.2, z);
+      camera.lookAt(0, 0.5, 0);
+    }
 
     if (isVRMode) {
       camera.position.set(0, 1.6, 0);
       camera.lookAt(0, 1.6, -1);
+      leftCamera.position.set(-eyeSep / 2, 1.6, 0);
+      rightCamera.position.set(eyeSep / 2, 1.6, 0);
     } else {
-      camera.position.set(0, 2.5, 7);
-      camera.lookAt(0, 0.5, 0);
+      applyOrbitCamera();
     }
 
-    // Stereo cameras for true split-screen VR (IPD ~6.4cm)
-    const eyeSeparation = 0.064;
-    const leftCamera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
-    const rightCamera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
-    leftCamera.position.set(-eyeSeparation / 2, 1.6, 0);
-    rightCamera.position.set(eyeSeparation / 2, 1.6, 0);
-
-    // Renderer with VR support
-    const renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      alpha: true,
-      xrCompatible: true
-    });
+    // ── Renderer ───────────────────────────────────────────────────────────
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, xrCompatible: true });
     renderer.setSize(width, height);
     renderer.setPixelRatio(isPerfMode ? 1 : Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = !isPerfMode;
@@ -100,273 +120,245 @@ export default function ThreeLabCanvas({
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     mountRef.current.appendChild(renderer.domElement);
 
-    // Lights - enhanced for VR
-    const ambient = new THREE.AmbientLight(0x1a2a4a, isVRMode ? 1.2 : 0.8);
-    scene.add(ambient);
-
-    const pointLight = new THREE.PointLight(0x00e5ff, isVRMode ? 2 : 1.5, 20);
+    // ── Lighting ───────────────────────────────────────────────────────────
+    scene.add(new THREE.AmbientLight(0x1a2a4a, isVRMode ? 1.2 : 0.9));
+    const pointLight = new THREE.PointLight(0x00e5ff, isVRMode ? 2 : 1.6, 20);
     pointLight.position.set(-2, 4, 2);
     pointLight.castShadow = true;
     scene.add(pointLight);
-
-    const rimLight = new THREE.PointLight(0x4488ff, isVRMode ? 1.2 : 0.8, 15);
+    const rimLight = new THREE.PointLight(0x4488ff, isVRMode ? 1.2 : 0.9, 15);
     rimLight.position.set(3, 3, -2);
     scene.add(rimLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    dirLight.position.set(0, 8, 4);
+    scene.add(dirLight);
 
-    const labLight = new THREE.DirectionalLight(0xffffff, isVRMode ? 0.6 : 0.4);
-    labLight.position.set(0, 8, 4);
-    scene.add(labLight);
+    // ── Glass material ─────────────────────────────────────────────────────
+    const glassMat = new THREE.MeshPhysicalMaterial({
+      color: 0xe8f4ff, transparent: true, opacity: 0.2,
+      roughness: 0.02, metalness: 0, transmission: 0.96, thickness: 0.3,
+    });
 
-    // ─── VR 360 Environment (dynamic experiment stations) ─────────────────
-    let vrInteractiveObjects: THREE.Object3D[] = [];
+    // ── Liquid material factory ────────────────────────────────────────────
+    function makeLiqMat(color: number, emissive: number, opacity = 0.82): THREE.MeshPhysicalMaterial {
+      return new THREE.MeshPhysicalMaterial({
+        color, emissive, emissiveIntensity: 0.25, transparent: true, opacity,
+        roughness: 0.06, transmission: 0.15,
+      });
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // VR 360 environment
+    // ─────────────────────────────────────────────────────────────────────
     if (isVRMode) {
-      const stations = experimentStations.length > 0
-        ? experimentStations
+      const stations = experimentStations.length > 0 ? experimentStations
         : [{ id: 'default', title: 'Chemistry Lab', category: 'General', difficulty: 'beginner', chemicals: [], equipment: [] }];
       const roomRefs = buildVRLabRoom(stations);
       scene.add(roomRefs.group);
-      vrInteractiveObjects = roomRefs.interactiveObjects;
-      scene.fog = new THREE.FogExp2(0x0a0f1e, 0.025);
-      scene.background = new THREE.Color(0x0a0f1e);
-    } else {
-      // Normal mode - just the workbench
-      scene.fog = new THREE.FogExp2(0x0a0f1e, 0.05);
+      scene.fog = new THREE.FogExp2(0x0a0f1e, 0.02);
 
-      const benchGeo = new THREE.BoxGeometry(10, 0.15, 3.5);
-      const benchMat = new THREE.MeshStandardMaterial({ color: 0x1a2535, roughness: 0.8, metalness: 0.1 });
-      const bench = new THREE.Mesh(benchGeo, benchMat);
+      // Register VR room interactive objects
+      roomRefs.interactiveObjects.forEach(obj => {
+        if (obj.userData?.name) {
+          interactionRef.current.set(obj.userData.name as string, {
+            mesh: obj, liquid: null, position: new THREE.Vector3(),
+            baseEmissive: new THREE.Color(0, 0, 0),
+            baseMat: null,
+          });
+        }
+      });
+    } else {
+      // Normal-mode bench
+      scene.fog = new THREE.FogExp2(0x0a0f1e, 0.04);
+      const bench = new THREE.Mesh(
+        new THREE.BoxGeometry(10, 0.15, 3.5),
+        new THREE.MeshStandardMaterial({ color: 0x1a2535, roughness: 0.8, metalness: 0.1 })
+      );
       bench.position.y = -0.5;
       bench.receiveShadow = true;
       scene.add(bench);
-
-      // Bench legs
       [[-4.5, -1.5, -1.5], [4.5, -1.5, -1.5], [-4.5, -1.5, 1.5], [4.5, -1.5, 1.5]].forEach(([x, y, z]) => {
         const leg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2, 0.1), new THREE.MeshStandardMaterial({ color: 0x111827, metalness: 0.6 }));
         leg.position.set(x, y, z);
         scene.add(leg);
       });
-
-      // Grid lines on bench
       const grid = new THREE.GridHelper(10, 20, 0x1e3a5f, 0x0d1f35);
-      grid.position.y = -0.42;
-      grid.position.z = -0.25;
+      grid.position.set(0, -0.42, -0.25);
       scene.add(grid);
     }
 
-    // ─── Interactive Lab Equipment ─────────────────────────────────────────
-    const interactiveObjects: THREE.Mesh[] = [];
-    const glassMat = new THREE.MeshPhysicalMaterial({
-      color: 0xe8f4ff, transparent: true, opacity: 0.2,
-      roughness: 0.02, metalness: 0, transmission: 0.96,
-      thickness: 0.3, envMapIntensity: 1.2,
-    });
+    // ─────────────────────────────────────────────────────────────────────
+    // Lab equipment helpers
+    // ─────────────────────────────────────────────────────────────────────
+    const eqOffset = isVRMode ? { y: 0.9, z: -3 } : { y: -0.42, z: 0 };
 
-    // Main Erlenmeyer Flask
+    function registerEquipment(name: string, mesh: THREE.Object3D, liquid: THREE.Mesh | null, worldPos: THREE.Vector3) {
+      const mat = (mesh as THREE.Mesh).material as THREE.MeshPhysicalMaterial | null;
+      interactionRef.current.set(name, {
+        mesh, liquid, position: worldPos.clone(),
+        baseEmissive: mat ? (mat.emissive?.clone() ?? new THREE.Color(0, 0, 0)) : new THREE.Color(0, 0, 0),
+        baseMat: mat ?? null,
+      });
+    }
+
+    // ── Erlenmeyer Flask ──────────────────────────────────────────────────
     const flaskGroup = new THREE.Group();
+    flaskGroup.position.set(isVRMode ? 0 : -0.5, eqOffset.y, eqOffset.z);
     scene.add(flaskGroup);
-    flaskGroup.position.set(isVRMode ? 0 : -0.5, isVRMode ? 0.9 : -0.42, isVRMode ? -3 : 0);
 
-    const flaskBodyGeo = new THREE.CylinderGeometry(0.6, 0.65, 1.0, 32, 1, true);
-    const flaskBody = new THREE.Mesh(flaskBodyGeo, glassMat);
+    const flaskBody = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.65, 1.0, 32, 1, true), glassMat);
     flaskBody.position.y = 0.5;
     flaskBody.userData = { name: 'Erlenmeyer Flask', interactive: true };
     flaskGroup.add(flaskBody);
-    interactiveObjects.push(flaskBody);
 
-    // Flask neck
-    const flaskNeck = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.15, 0.35, 0.6, 16, 1, true),
-      glassMat
-    );
+    const flaskNeck = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.35, 0.6, 16, 1, true), glassMat);
     flaskNeck.position.y = 1.3;
     flaskGroup.add(flaskNeck);
-
-    // Flask neck top rim
-    const flaskRim = new THREE.Mesh(
-      new THREE.TorusGeometry(0.15, 0.02, 8, 16),
-      new THREE.MeshStandardMaterial({ color: 0x88aabb, metalness: 0.3 })
-    );
-    flaskRim.position.y = 1.6;
-    flaskGroup.add(flaskRim);
-
-    // Flask bottom disk
+    flaskGroup.add(Object.assign(new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.02, 8, 16), new THREE.MeshStandardMaterial({ color: 0x88aabb, metalness: 0.3 })), { position: new THREE.Vector3(0, 1.6, 0) }));
     const flaskBottom = new THREE.Mesh(new THREE.CircleGeometry(0.65, 32), glassMat);
     flaskBottom.rotation.x = -Math.PI / 2;
     flaskGroup.add(flaskBottom);
 
-    // Liquid inside flask — color driven by experiment reaction
     const { r, g, b } = hexToRGB(reactionColor);
     const liquidMat = new THREE.MeshPhysicalMaterial({
-      color: new THREE.Color(r, g, b),
-      emissive: new THREE.Color(r * 0.4, g * 0.4, b * 0.4),
-      emissiveIntensity: 0.3,
-      transparent: true,
-      opacity: 0.82,
-      roughness: 0.06,
-      transmission: 0.15,
+      color: new THREE.Color(r, g, b), emissive: new THREE.Color(r * 0.4, g * 0.4, b * 0.4),
+      emissiveIntensity: 0.3, transparent: true, opacity: 0.82, roughness: 0.06, transmission: 0.15,
     });
-    const liquidGeo = new THREE.CylinderGeometry(0.58, 0.63, 0.5, 32);
-    const liquid = new THREE.Mesh(liquidGeo, liquidMat);
+    const liquid = new THREE.Mesh(new THREE.CylinderGeometry(0.58, 0.63, 0.5, 32), liquidMat);
     liquid.position.y = 0.25;
     flaskGroup.add(liquid);
+    const flaskSurface = new THREE.Mesh(new THREE.CircleGeometry(0.58, 32), liquidMat.clone());
+    flaskSurface.rotation.x = -Math.PI / 2;
+    flaskSurface.position.y = 0.5;
+    flaskGroup.add(flaskSurface);
 
-    // ─── Burette ─────────────────────────────────────────────────────────────
+    const flaskWorldPos = new THREE.Vector3();
+    flaskGroup.getWorldPosition(flaskWorldPos);
+    flaskWorldPos.y += 0.8;
+    registerEquipment('Erlenmeyer Flask', flaskBody, liquid, flaskWorldPos);
+
+    // ── Burette ────────────────────────────────────────────────────────────
     const buretteGroup = new THREE.Group();
-    buretteGroup.position.set(isVRMode ? 1.5 : 1.5, isVRMode ? 0.9 : -0.42, isVRMode ? -3 : 0);
+    buretteGroup.position.set(isVRMode ? 1.5 : 1.5, eqOffset.y, eqOffset.z);
     scene.add(buretteGroup);
 
     const buretteTube = new THREE.Mesh(
       new THREE.CylinderGeometry(0.07, 0.07, 2.5, 12),
-      new THREE.MeshPhysicalMaterial({ color: 0xd0e8ff, transparent: true, opacity: 0.3, roughness: 0.05 })
+      new THREE.MeshPhysicalMaterial({ color: 0xe8f4ff, transparent: true, opacity: 0.25, roughness: 0.02 })
     );
     buretteTube.position.y = 1.25;
     buretteTube.userData = { name: 'Burette', interactive: true };
     buretteGroup.add(buretteTube);
-    interactiveObjects.push(buretteTube);
 
-    // Burette liquid — NaOH (aq), faintly blue-clear
-    const buretteLiquid = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.055, 0.055, 1.8, 12),
-      new THREE.MeshPhysicalMaterial({
-        color: 0x90caf9,
-        emissive: 0x1565c0,
-        emissiveIntensity: 0.15,
-        transparent: true,
-        opacity: 0.65,
-        roughness: 0.04,
-        transmission: 0.3,
-      })
-    );
+    const buretteLiquidMat = new THREE.MeshPhysicalMaterial({
+      color: 0x90caf9, emissive: 0x1565c0, emissiveIntensity: 0.15,
+      transparent: true, opacity: 0.65, roughness: 0.04, transmission: 0.3,
+    });
+    const buretteLiquid = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 1.8, 12), buretteLiquidMat);
     buretteLiquid.position.y = 1.5;
     buretteGroup.add(buretteLiquid);
 
-    // Burette stand
-    const stand = new THREE.Mesh(
-      new THREE.BoxGeometry(0.05, 3, 0.05),
-      new THREE.MeshStandardMaterial({ color: 0x334455, metalness: 0.8 })
+    // Valve
+    const valve = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.06, 0.06, 0.12, 8),
+      new THREE.MeshStandardMaterial({ color: 0x334455, metalness: 0.7 })
     );
+    valve.rotation.z = Math.PI / 2;
+    valve.position.set(0, 0.05, 0);
+    valve.userData = { name: 'Burette Valve', interactive: true };
+    buretteGroup.add(valve);
+
+    const stand = new THREE.Mesh(new THREE.BoxGeometry(0.05, 3, 0.05), new THREE.MeshStandardMaterial({ color: 0x334455, metalness: 0.8 }));
     stand.position.set(-0.3, 1, 0);
     buretteGroup.add(stand);
-
-    const clamp = new THREE.Mesh(
-      new THREE.BoxGeometry(0.4, 0.08, 0.1),
-      new THREE.MeshStandardMaterial({ color: 0x556677, metalness: 0.6 })
-    );
+    const clamp = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.08, 0.1), new THREE.MeshStandardMaterial({ color: 0x556677, metalness: 0.6 }));
     clamp.position.set(-0.15, 1.6, 0);
     buretteGroup.add(clamp);
-
-    const base = new THREE.Mesh(
-      new THREE.BoxGeometry(0.8, 0.05, 0.6),
-      new THREE.MeshStandardMaterial({ color: 0x1a2535, metalness: 0.4 })
-    );
-    base.position.y = -0.02;
+    const base = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.05, 0.6), new THREE.MeshStandardMaterial({ color: 0x1a2535, metalness: 0.4 }));
     buretteGroup.add(base);
 
-    // ─── Test tubes rack ─────────────────────────────────────────────────────
+    const burWP = new THREE.Vector3();
+    buretteGroup.getWorldPosition(burWP);
+    burWP.y += 1.5;
+    registerEquipment('Burette', buretteTube, buretteLiquid, burWP);
+
+    // ── Test tube rack ─────────────────────────────────────────────────────
     const testTubesGroup = new THREE.Group();
-    testTubesGroup.position.set(isVRMode ? -2.5 : -2.2, isVRMode ? 0.9 : -0.42, isVRMode ? -3 : 0);
+    testTubesGroup.position.set(isVRMode ? -2.5 : -2.2, eqOffset.y, eqOffset.z);
     scene.add(testTubesGroup);
 
-    // Real chemistry liquid colors: CuSO4, K2Cr2O7, NiSO4, KMnO4
     const chemTubes = [
       { color: 0x1565c0, emissive: 0x0d47a1, name: 'CuSO₄ (aq)' },
       { color: 0xf57f17, emissive: 0xe65100, name: 'K₂Cr₂O₇ (aq)' },
       { color: 0x2e7d32, emissive: 0x1b5e20, name: 'NiSO₄ (aq)' },
       { color: 0x4a148c, emissive: 0x6a0080, name: 'KMnO₄ (aq)' },
     ];
-    for (let i = 0; i < 4; i++) {
+
+    const rackBase = new THREE.Mesh(new THREE.BoxGeometry(1, 0.04, 0.14), new THREE.MeshStandardMaterial({ color: 0x263238, roughness: 0.7 }));
+    rackBase.position.y = 0.02;
+    testTubesGroup.add(rackBase);
+    const rackTop = new THREE.Mesh(new THREE.BoxGeometry(1, 0.04, 0.14), new THREE.MeshStandardMaterial({ color: 0x263238, roughness: 0.7 }));
+    rackTop.position.y = 0.92;
+    testTubesGroup.add(rackTop);
+
+    chemTubes.forEach((ct, i) => {
+      const xPos = i * 0.22 - 0.33;
       const tube = new THREE.Mesh(
         new THREE.CylinderGeometry(0.062, 0.058, 0.72, 16, 1, true),
         new THREE.MeshPhysicalMaterial({ color: 0xe8f4ff, transparent: true, opacity: 0.22, roughness: 0.02, transmission: 0.95 })
       );
-      tube.position.set(i * 0.22 - 0.33, 0.55, 0);
-      tube.userData = { name: chemTubes[i].name, interactive: true };
+      tube.position.set(xPos, 0.55, 0);
+      tube.userData = { name: ct.name, interactive: true };
       testTubesGroup.add(tube);
-      interactiveObjects.push(tube);
 
-      // Tube bottom cap
-      const cap = new THREE.Mesh(
-        new THREE.SphereGeometry(0.058, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2),
-        new THREE.MeshPhysicalMaterial({ color: 0xe8f4ff, transparent: true, opacity: 0.22, roughness: 0.02, transmission: 0.95 })
-      );
+      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.058, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2), glassMat.clone());
       cap.rotation.x = Math.PI;
-      cap.position.set(i * 0.22 - 0.33, 0.19, 0);
+      cap.position.set(xPos, 0.19, 0);
       testTubesGroup.add(cap);
 
       const fillH = 0.18 + i * 0.06;
-      const tubeLiquid = new THREE.Mesh(
+      const liqMesh = new THREE.Mesh(
         new THREE.CylinderGeometry(0.05, 0.05, fillH, 16),
-        new THREE.MeshPhysicalMaterial({
-          color: chemTubes[i].color,
-          emissive: chemTubes[i].emissive,
-          emissiveIntensity: 0.3,
-          transparent: true,
-          opacity: 0.88,
-          roughness: 0.06,
-          transmission: 0.1,
-        })
+        makeLiqMat(ct.color, ct.emissive, 0.88)
       );
-      tubeLiquid.position.set(i * 0.22 - 0.33, 0.2 + fillH / 2, 0);
-      testTubesGroup.add(tubeLiquid);
-    }
+      liqMesh.position.set(xPos, 0.2 + fillH / 2, 0);
+      testTubesGroup.add(liqMesh);
 
-    // Rack bars (top + bottom)
-    const rack = new THREE.Mesh(
-      new THREE.BoxGeometry(1, 0.04, 0.14),
-      new THREE.MeshStandardMaterial({ color: 0x263238, roughness: 0.7 })
-    );
-    rack.position.set(0, 0.02, 0);
-    testTubesGroup.add(rack);
-    const rackTop = new THREE.Mesh(
-      new THREE.BoxGeometry(1, 0.04, 0.14),
-      new THREE.MeshStandardMaterial({ color: 0x263238, roughness: 0.7 })
-    );
-    rackTop.position.set(0, 0.92, 0);
-    testTubesGroup.add(rackTop);
+      const tubeWP = new THREE.Vector3();
+      testTubesGroup.getWorldPosition(tubeWP);
+      tubeWP.x += xPos;
+      tubeWP.y += 0.55;
+      registerEquipment(ct.name, tube, liqMesh, tubeWP);
+    });
 
-    // ─── Beaker with stirrer ─────────────────────────────────────────────────
+    // ── Beaker with stirrer ────────────────────────────────────────────────
     const beakerGroup = new THREE.Group();
-    beakerGroup.position.set(isVRMode ? 2.5 : 2.5, isVRMode ? 0.9 : -0.42, isVRMode ? -3 : 0);
+    beakerGroup.position.set(isVRMode ? 2.5 : 2.5, eqOffset.y, eqOffset.z);
     scene.add(beakerGroup);
 
     const beaker = new THREE.Mesh(
       new THREE.CylinderGeometry(0.4, 0.35, 0.8, 24, 1, true),
-      new THREE.MeshPhysicalMaterial({ color: 0xd0e8ff, transparent: true, opacity: 0.25, roughness: 0.05 })
+      new THREE.MeshPhysicalMaterial({ color: 0xe8f4ff, transparent: true, opacity: 0.2, roughness: 0.02 })
     );
     beaker.position.y = 0.4;
     beaker.userData = { name: 'Beaker', interactive: true };
     beakerGroup.add(beaker);
-    interactiveObjects.push(beaker);
-
     const beakerBottom = new THREE.Mesh(new THREE.CircleGeometry(0.35, 24), glassMat);
     beakerBottom.rotation.x = -Math.PI / 2;
     beakerGroup.add(beakerBottom);
 
-    // NaOH (aq) — faintly blue-tinted, clear alkaline solution
-    const beakerLiquid = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.345, 0.305, 0.48, 24),
-      new THREE.MeshPhysicalMaterial({
-        color: 0x4fc3f7,
-        emissive: 0x01579b,
-        emissiveIntensity: 0.2,
-        transparent: true,
-        opacity: 0.72,
-        roughness: 0.05,
-        transmission: 0.25,
-      })
-    );
+    const beakerLiqMat = new THREE.MeshPhysicalMaterial({
+      color: 0x4fc3f7, emissive: 0x01579b, emissiveIntensity: 0.2,
+      transparent: true, opacity: 0.72, roughness: 0.05, transmission: 0.25,
+    });
+    const beakerLiquid = new THREE.Mesh(new THREE.CylinderGeometry(0.345, 0.305, 0.48, 24), beakerLiqMat);
     beakerLiquid.position.y = 0.24;
     beakerGroup.add(beakerLiquid);
-    // Surface meniscus
-    const beakerSurface = new THREE.Mesh(
-      new THREE.CircleGeometry(0.345, 24),
-      new THREE.MeshPhysicalMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.5, roughness: 0.05 })
-    );
-    beakerSurface.rotation.x = -Math.PI / 2;
-    beakerSurface.position.y = 0.48;
-    beakerGroup.add(beakerSurface);
+    const bkSurface = new THREE.Mesh(new THREE.CircleGeometry(0.345, 24), beakerLiqMat.clone());
+    bkSurface.rotation.x = -Math.PI / 2;
+    bkSurface.position.y = 0.48;
+    beakerGroup.add(bkSurface);
 
-    // Stirring rod
     const stirrer = new THREE.Mesh(
       new THREE.CylinderGeometry(0.02, 0.02, 1, 8),
       new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.8 })
@@ -375,168 +367,384 @@ export default function ThreeLabCanvas({
     stirrer.rotation.z = 0.3;
     beakerGroup.add(stirrer);
 
-    // ─── Particle Systems ────────────────────────────────────────────────────
+    const bkWP = new THREE.Vector3();
+    beakerGroup.getWorldPosition(bkWP);
+    bkWP.y += 0.5;
+    registerEquipment('Beaker', beaker, beakerLiquid, bkWP);
+
+    // ── Pipette ────────────────────────────────────────────────────────────
+    const pipetteGroup = new THREE.Group();
+    pipetteGroup.position.set(isVRMode ? -1 : -3.5, eqOffset.y, eqOffset.z);
+    scene.add(pipetteGroup);
+
+    const pipetteBody = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.05, 0.03, 0.8, 12, 1, true),
+      new THREE.MeshPhysicalMaterial({ color: 0xe8f4ff, transparent: true, opacity: 0.25, roughness: 0.02 })
+    );
+    pipetteBody.position.y = 0.5;
+    pipetteBody.userData = { name: 'Pipette', interactive: true };
+    pipetteGroup.add(pipetteBody);
+
+    const pipetteBulb = new THREE.Mesh(
+      new THREE.SphereGeometry(0.12, 16, 12),
+      new THREE.MeshPhysicalMaterial({ color: 0xf8bbd9, transparent: true, opacity: 0.7, roughness: 0.15 })
+    );
+    pipetteBulb.position.y = 1.0;
+    pipetteGroup.add(pipetteBulb);
+
+    const pipetteTip = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.008, 0.015, 0.25, 8, 1, true),
+      new THREE.MeshPhysicalMaterial({ color: 0xe8f4ff, transparent: true, opacity: 0.3, roughness: 0.02 })
+    );
+    pipetteTip.position.y = 0.07;
+    pipetteGroup.add(pipetteTip);
+
+    const pipetteWP = new THREE.Vector3();
+    pipetteGroup.getWorldPosition(pipetteWP);
+    pipetteWP.y += 0.6;
+    registerEquipment('Pipette', pipetteBody, null, pipetteWP);
+
+    // ── Particles ──────────────────────────────────────────────────────────
     const particles: THREE.Points[] = [];
 
     function createGasParticles() {
       const geo = new THREE.BufferGeometry();
       const count = isVRMode ? 150 : 80;
       const pos = new Float32Array(count * 3);
-      const basePos = isVRMode ? -3 : 0;
       for (let i = 0; i < count; i++) {
         pos[i * 3] = (Math.random() - 0.5) * 0.8 + (isVRMode ? 0 : -0.5);
         pos[i * 3 + 1] = Math.random() * 1.5 + 1.5;
-        pos[i * 3 + 2] = (Math.random() - 0.5) * 0.8 + basePos;
+        pos[i * 3 + 2] = (Math.random() - 0.5) * 0.8 + eqOffset.z;
       }
       geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-      const mat = new THREE.PointsMaterial({ color: 0xaaffff, size: 0.04, transparent: true, opacity: 0.7 });
-      const points = new THREE.Points(geo, mat);
-      scene.add(points);
-      particles.push(points);
+      const pts = new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xaaffff, size: 0.04, transparent: true, opacity: 0.7 }));
+      scene.add(pts);
+      particles.push(pts);
     }
 
     function createPrecipitate() {
       const geo = new THREE.BufferGeometry();
       const count = isVRMode ? 200 : 120;
       const pos = new Float32Array(count * 3);
-      const basePos = isVRMode ? -3 : 0;
       for (let i = 0; i < count; i++) {
         const r2 = Math.random() * 0.55;
         const a = Math.random() * Math.PI * 2;
         pos[i * 3] = Math.cos(a) * r2 + (isVRMode ? 0 : -0.5);
         pos[i * 3 + 1] = Math.random() * 0.4 + (isVRMode ? 0.9 : -0.4);
-        pos[i * 3 + 2] = Math.sin(a) * r2 + basePos;
+        pos[i * 3 + 2] = Math.sin(a) * r2 + eqOffset.z;
       }
       geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-      const mat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.02, transparent: true, opacity: 0.8 });
-      const points = new THREE.Points(geo, mat);
-      scene.add(points);
-      particles.push(points);
+      const pts = new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.02, transparent: true, opacity: 0.8 }));
+      scene.add(pts);
+      particles.push(pts);
     }
 
-    // Click handler for interactive objects
-    const raycaster = new THREE.Raycaster();
-    const mouse = new THREE.Vector2();
+    // ── Pour animation ──────────────────────────────────────────────────────
+    function triggerPourAnimation(fromPos: THREE.Vector3, toPos: THREE.Vector3, color: number) {
+      const count = 60;
+      const geo = new THREE.BufferGeometry();
+      const pos = new Float32Array(count * 3);
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      const mat = new THREE.PointsMaterial({
+        color,
+        size: 0.05,
+        transparent: true,
+        opacity: 0.9,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const pts = new THREE.Points(geo, mat);
+      scene.add(pts);
+      pourRef.current.push(pts);
 
-    function handleClick(event: MouseEvent | TouchEvent) {
-      if (!mountRef.current || !isVRMode) return;
-
-      const rect = mountRef.current.getBoundingClientRect();
-      const clientX = 'touches' in event ? event.touches[0].clientX : event.clientX;
-      const clientY = 'touches' in event ? event.touches[0].clientY : event.clientY;
-
-      mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-      mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-
-      raycaster.setFromCamera(mouse, camera);
-      const intersects = raycaster.intersectObjects(interactiveObjects);
-
-      if (intersects.length > 0) {
-        const obj = intersects[0].object;
-        const name = obj.userData?.name;
-        if (name) {
-          setSelectedObject(name);
-          onObjectClick?.(name);
-          setTimeout(() => setSelectedObject(null), 2000);
+      let t = 0;
+      const totalTime = 2.2; // seconds
+      const animInterval = setInterval(() => {
+        t += 0.025;
+        if (t > totalTime) {
+          clearInterval(animInterval);
+          scene.remove(pts);
+          pourRef.current = pourRef.current.filter(p => p !== pts);
+          geo.dispose();
+          mat.dispose();
+          return;
         }
+        const arr = geo.attributes.position.array as Float32Array;
+        for (let i = 0; i < count; i++) {
+          const p = ((i / count) + t * 0.5) % 1;
+          const sag = Math.sin(p * Math.PI) * 0.4; // arc drop
+          arr[i * 3] = lerp(fromPos.x, toPos.x, p);
+          arr[i * 3 + 1] = lerp(fromPos.y, toPos.y, p) + sag;
+          arr[i * 3 + 2] = lerp(fromPos.z, toPos.z, p);
+        }
+        geo.attributes.position.needsUpdate = true;
+        mat.opacity = t < totalTime - 0.3 ? 0.9 : 0.9 * ((totalTime - t) / 0.3);
+      }, 16);
+    }
+
+    // ── Equipment highlight helper ──────────────────────────────────────────
+    function highlightEquipment(name: string | null, on: boolean) {
+      if (!name) return;
+      const entry = interactionRef.current.get(name);
+      if (!entry?.baseMat) return;
+      if (on) {
+        entry.baseMat.emissive.setHex(0x00e5ff);
+        entry.baseMat.emissiveIntensity = 0.7;
+      } else {
+        entry.baseMat.emissive.copy(entry.baseEmissive);
+        entry.baseMat.emissiveIntensity = 0.25;
+      }
+      entry.baseMat.needsUpdate = true;
+    }
+
+    // ── Pick / Pour logic ──────────────────────────────────────────────────
+    function handlePickPour(hitName: string) {
+      const current = heldRef.current;
+      if (!current) {
+        // Pick up
+        heldRef.current = hitName;
+        setHeldItem(hitName);
+        highlightEquipment(hitName, true);
+        flashMsg(`Picked up ${hitName}`);
+        onObjectClick?.(hitName);
+        if ('vibrate' in navigator) navigator.vibrate(40);
+      } else if (current === hitName) {
+        // Put down same item
+        heldRef.current = null;
+        setHeldItem(null);
+        highlightEquipment(hitName, false);
+        flashMsg(`Released ${hitName}`);
+      } else {
+        // Pour!
+        const fromEntry = interactionRef.current.get(current);
+        const toEntry = interactionRef.current.get(hitName);
+        if (fromEntry && toEntry) {
+          const fromColor = fromEntry.liquid
+            ? ((fromEntry.liquid.material as THREE.MeshPhysicalMaterial).color.getHex())
+            : 0x00e5ff;
+          triggerPourAnimation(fromEntry.position, toEntry.position, fromColor);
+          onPour?.(current, hitName);
+          flashMsg(`Poured ${current} → ${hitName}`);
+          if ('vibrate' in navigator) navigator.vibrate([30, 20, 60]);
+        }
+        highlightEquipment(current, false);
+        heldRef.current = null;
+        setHeldItem(null);
+        onObjectClick?.(hitName);
       }
     }
 
-    if (isVRMode) {
-      mountRef.current.addEventListener('click', handleClick);
-      mountRef.current.addEventListener('touchend', handleClick);
+    // ── Raycaster setup ────────────────────────────────────────────────────
+    const raycaster = new THREE.Raycaster();
+    const allMeshes = Array.from(interactionRef.current.values()).map(e => e.mesh);
+
+    function pickFromScreen(clientX: number, clientY: number) {
+      if (!mountRef.current) return;
+      const rect = mountRef.current.getBoundingClientRect();
+      const x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      const y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(new THREE.Vector2(x, y), camera);
+      const hits = raycaster.intersectObjects(allMeshes, true);
+      if (hits.length === 0) {
+        if (heldRef.current) {
+          highlightEquipment(heldRef.current, false);
+          heldRef.current = null;
+          setHeldItem(null);
+        }
+        return;
+      }
+      let obj: THREE.Object3D | null = hits[0].object;
+      while (obj && !obj.userData?.name) obj = obj.parent;
+      if (obj?.userData?.name) handlePickPour(obj.userData.name as string);
     }
 
-    let time = 0;
-    let deviceOrientationData = { alpha: 0, beta: 0, gamma: 0 };
+    // ── Orbit + click controls (normal mode) ───────────────────────────────
+    let isDragging = false;
+    let didMove = false;
+    let prevPointer = { x: 0, y: 0 };
+    let pinchStartDist = 0;
+    let pointerDownTime = 0;
 
-    // Device orientation handler for mobile VR
-    const handleDeviceOrientation = (e: DeviceOrientationEvent) => {
+    function onPointerDown(e: MouseEvent | TouchEvent) {
+      isDragging = true;
+      didMove = false;
+      pointerDownTime = Date.now();
+      const pt = 'touches' in e ? e.touches[0] : e;
+      prevPointer = { x: pt.clientX, y: pt.clientY };
+      if ('touches' in e && e.touches.length === 2) {
+        pinchStartDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+      }
+    }
+
+    function onPointerMove(e: MouseEvent | TouchEvent) {
+      if (!isDragging) return;
+      if ('touches' in e && e.touches.length === 2) {
+        const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+        if (pinchStartDist > 0) {
+          orbit.radius = Math.max(2.5, Math.min(12, orbit.radius * (pinchStartDist / dist)));
+        }
+        pinchStartDist = dist;
+        didMove = true;
+        return;
+      }
+      const pt = 'touches' in e ? e.touches[0] : e;
+      const dx = pt.clientX - prevPointer.x;
+      const dy = pt.clientY - prevPointer.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) didMove = true;
+      orbit.theta -= dx * 0.005;
+      orbit.phi = Math.max(0.05, Math.min(Math.PI / 2.1, orbit.phi - dy * 0.005));
+      prevPointer = { x: pt.clientX, y: pt.clientY };
+      if (!isVRMode) applyOrbitCamera();
+    }
+
+    function onPointerUp(e: MouseEvent | TouchEvent) {
+      if (!isDragging) return;
+      isDragging = false;
+      // Short tap without much movement → treat as interaction click
+      const dt = Date.now() - pointerDownTime;
+      if (!didMove && dt < 500) {
+        if (isVRMode) return; // VR uses gaze
+        const pt = 'changedTouches' in e ? e.changedTouches[0] : e as MouseEvent;
+        pickFromScreen(pt.clientX, pt.clientY);
+      }
+    }
+
+    const domEl = mountRef.current;
+    domEl.addEventListener('mousedown', onPointerDown as EventListener);
+    window.addEventListener('mousemove', onPointerMove as EventListener);
+    window.addEventListener('mouseup', onPointerUp as EventListener);
+    domEl.addEventListener('touchstart', onPointerDown as EventListener, { passive: true });
+    domEl.addEventListener('touchmove', onPointerMove as EventListener, { passive: true });
+    domEl.addEventListener('touchend', onPointerUp as EventListener);
+
+    // ── Device orientation (VR) ────────────────────────────────────────────
+    let deviceOri = { alpha: 0, beta: 0, gamma: 0 };
+    const onDeviceOri = (e: DeviceOrientationEvent) => {
       if (!isDeviceOrientation || !isVRMode) return;
-      deviceOrientationData = {
-        alpha: e.alpha || 0,
-        beta: e.beta || 0,
-        gamma: e.gamma || 0,
-      };
+      deviceOri = { alpha: e.alpha ?? 0, beta: e.beta ?? 0, gamma: e.gamma ?? 0 };
     };
+    window.addEventListener('deviceorientation', onDeviceOri);
 
-    if (isDeviceOrientation) {
-      window.addEventListener('deviceorientation', handleDeviceOrientation);
-    }
+    // ── VR Gaze state ──────────────────────────────────────────────────────
+    let gazeObjName: string | null = null;
+    let gazeStart: number | null = null;
+    const GAZE_DURATION = 1500;
+    let gazeAutoRotate = 0;
 
-    // Animation loop
+    // ── Animation loop ─────────────────────────────────────────────────────
+    let time = 0;
     function animate() {
       time += 0.016;
 
-      // VR mode - device orientation controls camera (head tracking)
-      if (isVRMode && isDeviceOrientation) {
-        const alpha = THREE.MathUtils.degToRad(deviceOrientationData.alpha);
-        const beta = THREE.MathUtils.degToRad(deviceOrientationData.beta);
-        const gamma = THREE.MathUtils.degToRad(deviceOrientationData.gamma);
+      if (isVRMode) {
+        if (isDeviceOrientation) {
+          // Head tracking
+          const alpha = THREE.MathUtils.degToRad(deviceOri.alpha);
+          const beta = THREE.MathUtils.degToRad(deviceOri.beta);
+          const gamma = THREE.MathUtils.degToRad(deviceOri.gamma);
+          camera.rotation.set(beta, alpha, -gamma, 'YXZ');
+          leftCamera.rotation.copy(camera.rotation);
+          rightCamera.rotation.copy(camera.rotation);
+        } else {
+          // Auto slow rotate for 360 preview
+          gazeAutoRotate += 0.005;
+          camera.rotation.set(0, gazeAutoRotate, 0, 'YXZ');
+          leftCamera.rotation.copy(camera.rotation);
+          rightCamera.rotation.copy(camera.rotation);
+        }
 
-        camera.rotation.set(beta, alpha, -gamma, 'YXZ');
-        leftCamera.rotation.copy(camera.rotation);
-        rightCamera.rotation.copy(camera.rotation);
-      } else if (isVRMode) {
-        // VR without gyro - allow gentle auto-rotation for 360 feel
-        const autoAngle = time * 0.05;
-        camera.rotation.set(0, autoAngle, 0, 'YXZ');
-        leftCamera.rotation.copy(camera.rotation);
-        rightCamera.rotation.copy(camera.rotation);
+        // Gaze detection
+        raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+        const gazeHits = raycaster.intersectObjects(allMeshes, true);
+        let newGazeTarget: string | null = null;
+        if (gazeHits.length > 0) {
+          let obj: THREE.Object3D | null = gazeHits[0].object;
+          while (obj && !obj.userData?.name) obj = obj.parent;
+          newGazeTarget = obj?.userData?.name ?? null;
+        }
+
+        if (newGazeTarget !== gazeObjName) {
+          gazeObjName = newGazeTarget;
+          gazeStart = newGazeTarget ? performance.now() : null;
+          setGazeTarget(newGazeTarget);
+          setGazeProgress(0);
+        }
+
+        if (gazeObjName && gazeStart !== null) {
+          const prog = Math.min((performance.now() - gazeStart) / GAZE_DURATION, 1);
+          setGazeProgress(prog);
+          if (prog >= 1) {
+            handlePickPour(gazeObjName);
+            gazeStart = null;
+            setGazeProgress(0);
+            gazeObjName = null;
+            setGazeTarget(null);
+          }
+        }
       } else {
-        // Normal mode - gentle camera sway
-        camera.position.x = Math.sin(time * 0.1) * 0.3;
-        if (!isVRMode) camera.lookAt(0, 0.5, 0);
+        // Normal mode: gentle idle sway when not dragging
+        if (!isDragging) {
+          camera.position.x += (Math.sin(time * 0.07) * 0.05 - camera.position.x) * 0.005;
+          const cx = orbit.radius * Math.sin(orbit.theta) * Math.cos(orbit.phi);
+          const cz = orbit.radius * Math.cos(orbit.theta) * Math.cos(orbit.phi);
+          camera.position.x = cx + Math.sin(time * 0.07) * 0.02;
+          camera.position.z = cz;
+          camera.lookAt(0, 0.5, 0);
+        }
       }
 
-      // Liquid gentle wave
-      if (liquid) {
-        liquid.position.y = 0.25 + Math.sin(time * 1.5) * 0.01;
-      }
+      // Liquid wave
+      if (liquid) liquid.position.y = 0.25 + Math.sin(time * 1.5) * 0.008;
 
-      // Gas particle animation
+      // Gas particles
       particles.forEach(pts => {
-        const positions = pts.geometry.attributes.position.array as Float32Array;
-        for (let i = 1; i < positions.length; i += 3) {
-          positions[i] += 0.008;
-          if (positions[i] > 2.5) positions[i] = 1.5;
+        const pa = pts.geometry.attributes.position.array as Float32Array;
+        for (let i = 1; i < pa.length; i += 3) {
+          pa[i] += 0.008;
+          if (pa[i] > 2.5) pa[i] = 1.5;
         }
         pts.geometry.attributes.position.needsUpdate = true;
         (pts.material as THREE.PointsMaterial).opacity = 0.4 + Math.sin(time * 2) * 0.3;
       });
 
-      // Burette drip indicator
-      const buretteMat = buretteLiquid.material as THREE.MeshStandardMaterial;
-      buretteMat.emissiveIntensity = 0.05 + Math.sin(time * 3) * 0.05;
+      // Burette drip pulse
+      (buretteLiquid.material as THREE.MeshPhysicalMaterial).emissiveIntensity = 0.1 + Math.sin(time * 3) * 0.08;
 
-      // Point light subtle pulse
-      pointLight.intensity = (isVRMode ? 2 : 1.5) + Math.sin(time * 0.7) * 0.2;
+      // Held item gentle float (highlight intensity pulse)
+      if (heldRef.current) {
+        const entry = interactionRef.current.get(heldRef.current);
+        if (entry?.baseMat) {
+          entry.baseMat.emissiveIntensity = 0.5 + Math.sin(time * 4) * 0.2;
+        }
+      }
 
-      // True stereo split-screen rendering for VR box mode
+      pointLight.intensity = (isVRMode ? 2 : 1.6) + Math.sin(time * 0.7) * 0.2;
+
+      // Stereo or mono render
       if (isVRMode && isStereoMode) {
-        const w = renderer.domElement.width / renderer.domElement.height;
-        const halfW = renderer.domElement.width / 2;
-
         renderer.setScissorTest(true);
-
-        // Left eye
-        renderer.setViewport(0, 0, halfW, renderer.domElement.height);
-        renderer.setScissor(0, 0, halfW, renderer.domElement.height);
-        leftCamera.aspect = 0.5 * w;
+        const hw = renderer.domElement.width / 2;
+        const h = renderer.domElement.height;
+        renderer.setViewport(0, 0, hw, h);
+        renderer.setScissor(0, 0, hw, h);
+        leftCamera.aspect = (hw / h);
+        leftCamera.position.copy(camera.position).add(new THREE.Vector3(-eyeSep / 2, 0, 0));
+        leftCamera.quaternion.copy(camera.quaternion);
         leftCamera.updateProjectionMatrix();
         renderer.render(scene, leftCamera);
 
-        // Right eye
-        renderer.setViewport(halfW, 0, halfW, renderer.domElement.height);
-        renderer.setScissor(halfW, 0, halfW, renderer.domElement.height);
-        rightCamera.aspect = 0.5 * w;
+        renderer.setViewport(hw, 0, hw, h);
+        renderer.setScissor(hw, 0, hw, h);
+        rightCamera.aspect = (hw / h);
+        rightCamera.position.copy(camera.position).add(new THREE.Vector3(eyeSep / 2, 0, 0));
+        rightCamera.quaternion.copy(camera.quaternion);
         rightCamera.updateProjectionMatrix();
         renderer.render(scene, rightCamera);
-
         renderer.setScissorTest(false);
       } else {
         renderer.render(scene, camera);
       }
+
       sceneRef.current!.frameId = requestAnimationFrame(animate);
     }
 
@@ -546,18 +754,10 @@ export default function ThreeLabCanvas({
     sceneRef.current = {
       renderer, scene, camera, leftCamera, rightCamera,
       frameId: requestAnimationFrame(animate),
-      flask: flaskBody,
-      liquid,
-      particles,
-      burette: buretteGroup,
-      testTubes: [testTubesGroup],
-      beaker: beaker,
-      time,
-      vrInteractiveObjects,
-      deviceOrientation: deviceOrientationData,
+      liquid, buretteLiquid, particles, time,
     };
 
-    // Resize handler
+    // Resize
     const handleResize = () => {
       if (!mountRef.current) return;
       const w = mountRef.current.clientWidth;
@@ -568,71 +768,133 @@ export default function ThreeLabCanvas({
     };
     window.addEventListener('resize', handleResize);
 
-    // Cleanup
     return () => {
       window.removeEventListener('resize', handleResize);
-      window.removeEventListener('deviceorientation', handleDeviceOrientation);
+      window.removeEventListener('deviceorientation', onDeviceOri);
+      window.removeEventListener('mousemove', onPointerMove as EventListener);
+      window.removeEventListener('mouseup', onPointerUp as EventListener);
       if (mountRef.current) {
-        mountRef.current.removeEventListener('click', handleClick);
-        mountRef.current.removeEventListener('touchend', handleClick);
+        mountRef.current.removeEventListener('mousedown', onPointerDown as EventListener);
+        mountRef.current.removeEventListener('touchstart', onPointerDown as EventListener);
+        mountRef.current.removeEventListener('touchmove', onPointerMove as EventListener);
+        mountRef.current.removeEventListener('touchend', onPointerUp as EventListener);
       }
-      if (sceneRef.current) {
-        cancelAnimationFrame(sceneRef.current.frameId);
-      }
+      if (sceneRef.current) cancelAnimationFrame(sceneRef.current.frameId);
       if (mountRef.current && renderer.domElement.parentNode === mountRef.current) {
         mountRef.current.removeChild(renderer.domElement);
       }
       renderer.dispose();
+      interactionRef.current.clear();
     };
-  }, [isVRMode, isDeviceOrientation, isPerfMode, experimentStations]);
+  }, [isVRMode, isDeviceOrientation, isPerfMode, isStereoMode, experimentStations]);
 
-  // Update liquid color reactively
+  // ── Reactive liquid color ─────────────────────────────────────────────────
   useEffect(() => {
     if (!sceneRef.current) return;
     const { r, g, b } = hexToRGB(reactionColor);
-    const liquidMesh = sceneRef.current.liquid;
-    const mat = liquidMesh.material as THREE.MeshPhysicalMaterial;
+    const mat = sceneRef.current.liquid.material as THREE.MeshPhysicalMaterial;
     mat.color.setRGB(r, g, b);
     mat.emissive.setRGB(r * 0.4, g * 0.4, b * 0.4);
     mat.needsUpdate = true;
   }, [reactionColor]);
 
-  // Stereo mode - render with split-screen effect
-  const stereoStyle = isStereoMode ? {
-    transform: 'scaleX(0.5)',
-    transformOrigin: 'left center',
-  } : {};
+  // ── VR crosshair ring math ────────────────────────────────────────────────
+  const crosshairR = 14;
+  const circumference = 2 * Math.PI * crosshairR;
 
   return (
-    <div ref={mountRef} className={`w-full h-full relative ${isStereoMode ? 'stereo-mode' : ''}`} style={stereoStyle}>
-      {/* VR Mode HUD */}
-      {isVRMode && (
-        <div className="absolute inset-0 pointer-events-none">
-          {/* Crosshair for VR aiming */}
-          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
-            <div className="w-6 h-6 border-2 border-cyan-400/50 rounded-full" />
-            <div className="absolute top-1/2 left-1/2 w-1 h-1 bg-cyan-400 rounded-full transform -translate-x-1/2 -translate-y-1/2" />
-          </div>
+    <div ref={mountRef} className="w-full h-full relative select-none" style={{ cursor: heldItem ? 'grabbing' : 'grab' }}>
 
-          {/* Selected object label */}
-          {selectedObject && (
-            <div className="absolute bottom-20 left-1/2 transform -translate-x-1/2 bg-cyan-500/20 backdrop-blur-sm border border-cyan-500/40 rounded-lg px-4 py-2">
-              <p className="text-cyan-300 text-sm font-medium">{selectedObject}</p>
-            </div>
-          )}
-
-          {/* VR Instructions */}
-          <div className="absolute top-4 left-1/2 transform -translate-x-1/2 text-center">
-            <p className="text-slate-400 text-xs">Move device to look around · Tap to interact</p>
+      {/* ── Held item badge ─────────────────────────────────────────────── */}
+      {heldItem && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 pointer-events-none">
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-cyan-500/20 backdrop-blur-md border border-cyan-400/50 rounded-full shadow-lg shadow-cyan-500/20 animate-pulse">
+            <div className="w-2 h-2 rounded-full bg-cyan-400" />
+            <span className="text-cyan-200 text-xs font-semibold">Holding: {heldItem}</span>
+            <span className="text-slate-400 text-xs">· tap target to pour</span>
           </div>
         </div>
       )}
 
-      {/* Normal mode HUD */}
-      {!isVRMode && (
-        <div className="absolute bottom-3 right-3 glass rounded-lg px-3 py-2 text-xs text-slate-400 flex items-center gap-2">
-          <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-          3D Lab Simulation — Interactive
+      {/* ── Interaction message toast ────────────────────────────────────── */}
+      {interactionMsg && !heldItem && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 pointer-events-none">
+          <div className="px-3 py-1.5 bg-slate-800/90 backdrop-blur-md border border-slate-600/50 rounded-full text-slate-300 text-xs shadow">
+            {interactionMsg}
+          </div>
+        </div>
+      )}
+
+      {/* ── Normal mode hint ────────────────────────────────────────────── */}
+      {!isVRMode && !heldItem && (
+        <div className="absolute bottom-3 right-3 z-10 pointer-events-none">
+          <div className="glass rounded-lg px-3 py-2 text-xs text-slate-400 flex items-center gap-2">
+            <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+            Drag to orbit · Tap equipment to pick up
+          </div>
+        </div>
+      )}
+
+      {/* ── VR crosshair + gaze UI ─────────────────────────────────────── */}
+      {isVRMode && (
+        <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-20">
+          {/* Center crosshair */}
+          <div className="relative flex items-center justify-center">
+            <div
+              className="w-8 h-8 rounded-full border-2 flex items-center justify-center transition-all duration-150"
+              style={{
+                borderColor: gazeTarget ? 'rgba(0,229,255,0.95)' : 'rgba(148,163,184,0.5)',
+                boxShadow: gazeTarget ? '0 0 16px rgba(0,229,255,0.7)' : 'none',
+                transform: heldItem ? 'scale(1.3)' : 'scale(1)',
+              }}
+            >
+              <div className="w-1 h-1 rounded-full" style={{ background: gazeTarget ? '#00e5ff' : 'rgba(148,163,184,0.7)' }} />
+            </div>
+            {/* Gaze progress ring */}
+            {gazeTarget && (
+              <svg className="absolute inset-0 -rotate-90" width="32" height="32" viewBox="0 0 32 32">
+                <circle cx="16" cy="16" r={crosshairR} fill="none" stroke="#00e5ff" strokeWidth="2.5"
+                  strokeDasharray={circumference}
+                  strokeDashoffset={circumference * (1 - gazeProgress)}
+                  style={{ transition: 'stroke-dashoffset 0.05s linear' }}
+                />
+              </svg>
+            )}
+          </div>
+
+          {/* Gaze label */}
+          {gazeTarget && (
+            <div className="absolute bottom-28 left-1/2 -translate-x-1/2 text-center space-y-1">
+              <div className="inline-block bg-cyan-500/20 backdrop-blur-sm border border-cyan-500/40 rounded-xl px-5 py-2">
+                <p className="text-cyan-200 text-sm font-semibold">{gazeTarget}</p>
+                <p className="text-slate-400 text-xs mt-0.5">
+                  {heldItem ? `Gaze to pour ${heldItem} →` : 'Gaze to pick up'}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* VR held item */}
+          {heldItem && (
+            <div className="absolute top-8 left-1/2 -translate-x-1/2">
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-cyan-500/20 border border-cyan-400/50 rounded-full backdrop-blur-sm">
+                <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                <span className="text-cyan-200 text-xs font-semibold">Holding: {heldItem}</span>
+              </div>
+            </div>
+          )}
+
+          {/* VR top instructions */}
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 text-center pointer-events-none">
+            <p className="text-slate-500 text-xs">
+              {isDeviceOrientation ? 'Move head to look · Gaze 1.5s to interact' : 'Auto-rotate · Enable Gyro for head tracking'}
+            </p>
+          </div>
+
+          {/* VR stereo separator line */}
+          {isStereoMode && (
+            <div className="absolute top-0 bottom-0 left-1/2 w-px bg-black/60 pointer-events-none" />
+          )}
         </div>
       )}
     </div>

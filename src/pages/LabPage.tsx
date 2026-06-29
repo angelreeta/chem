@@ -891,9 +891,29 @@ export default function LabPage() {
             equipment: experiment.equipment,
           }]}
           onObjectClick={(name) => {
-            const msg: AiMessage = { role: 'ai', text: `You clicked on ${name}. This is a piece of lab equipment. Use it carefully according to the experiment procedure.`, type: 'info' };
+            if (name.startsWith('__')) return; // internal events
+            const equipInfo: Record<string, string> = {
+              'Erlenmeyer Flask': 'Contains the acid solution. Add indicator drops first, then titrate from the burette.',
+              'Burette': 'Filled with base solution. Open the valve slowly to drip into the flask below.',
+              'Beaker': 'Use this to measure and transfer solutions. Can be poured into the flask.',
+              'Pipette': 'For precise volume transfer. Squeeze the bulb, dip in solution, then release slowly.',
+              'CuSO₄ (aq)': 'Copper sulfate — bright blue solution. Common reagent in electrochemistry experiments.',
+              'K₂Cr₂O₇ (aq)': 'Potassium dichromate — orange solution. Strong oxidizing agent. Handle with care!',
+              'NiSO₄ (aq)': 'Nickel sulfate — green solution. Used in electroplating and precipitation reactions.',
+              'KMnO₄ (aq)': 'Potassium permanganate — deep purple. Powerful oxidizer used as an indicator.',
+            };
+            const info = equipInfo[name] ?? `${name} is a piece of lab equipment. Use it according to the procedure.`;
+            const msg: AiMessage = { role: 'ai', text: info, type: 'info' };
             setAiMessages(prev => [...prev, msg]);
-            setActiveTab('tutor');
+          }}
+          onPour={(from, to) => {
+            const pourMsg = `Reaction observed: You poured ${from} into ${to}. Watch the color change and note any gas or precipitate formation!`;
+            const msg: AiMessage = { role: 'ai', text: pourMsg, type: 'info' };
+            setAiMessages(prev => [...prev, msg]);
+            // Advance reaction state for interactivity
+            if (currentStep < (experiment.steps as ExperimentStep[]).length - 1) {
+              setCurrentStep(s => Math.min(s + 1, (experiment.steps as ExperimentStep[]).length - 1));
+            }
           }}
         />
 
